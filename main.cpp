@@ -163,9 +163,8 @@ void* tracker_thread(void* arg)
 			default:
 				continue;
 		}
-
 	}
-
+	return 0;
 }
 
 int main(int argc, char* argv[])
@@ -222,6 +221,7 @@ int main(int argc, char* argv[])
 	// create threads
 	for (int i = 0; i < num_threads; ++i)
 	{
+		printf("starting thread %d\n", i);
 		r = pthread_create(&threads[i], NULL, &tracker_thread, 0);
 		if (r != 0)
 		{
@@ -238,6 +238,10 @@ int main(int argc, char* argv[])
 	{
 		fprintf(stderr, "sigwait failed (%d): %s\n", errno, strerror(errno));
 	}
+	else
+	{
+		puts("received SIGTERM, shutting down\n");
+	}
 
 	close(udp_socket);
 
@@ -245,6 +249,7 @@ int main(int argc, char* argv[])
 	{
 		void* retval = 0;
 		pthread_join(threads[i], &retval);
+		printf("thread %d terminated\n", i);
 	}
 
 	free(threads);
