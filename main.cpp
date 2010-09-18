@@ -30,45 +30,16 @@ Copyright (C) 2010  Arvid Norberg
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "hash.hpp"
+#include "swarm.hpp"
+#include "messages.hpp"
+
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
 
 // this is the UDP socket we accept tracker announces to
 int udp_socket = -1;
-
-struct udp_tracker_message
-{
-	uint64_t connection_id;
-	uint32_t action;
-	uint32_t transaction_id;
-	uint8_t hash[20];
-	uint8_t peer_id[20];
-	int64_t downloaded;
-	int64_t left;
-	int64_t uploaded;
-	int32_t event;
-	uint32_t ip;
-	uint32_t key;
-	int32_t num_want;
-	uint16_t port;
-	uint16_t extensions;
-};
-
-struct udp_tracker_response
-{
-	uint32_t action;
-	uint32_t transaction_id;
-	uint64_t connection_id;
-};
-
-enum action_t
-{
-	action_connect = 0,
-	action_announce = 1,
-	action_scrape = 2,
-	action_error = 3
-};
 
 SHA_CTX secret;
 
@@ -95,6 +66,10 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in* from)
 	gen_secret_digest(from, digest);
 	return memcmp((char*)&conn_id, digest, sizeof(conn_id)) == 0;
 }
+
+pthread_rwlock_t swarm_mutex;
+typedef hash_map<sha1_hash, swarm*, sha1_hash_fun> swarm_map_t;
+swarm_map_t swarms;
 
 // send a packet and retry on EINTR
 bool respond(int socket, char const* buf, int len, sockaddr const* to, socklen_t tolen)
@@ -129,37 +104,148 @@ void* tracker_thread(void* arg)
 			break;
 		}
 
-		udp_tracker_message* hdr = (udp_tracker_message*)buffer;
+		if (size < 16)
+		{
+			// log incorrect packet
+			continue;
+		}
+
+		udp_announce_message* hdr = (udp_announce_message*)buffer;
 
 		switch (hdr->action)
 		{
 			case action_connect:
+			{
 				if (hdr->connection_id != 0x41727101980LL)
 				{
 					// log error
 					continue;
 				}
-				udp_tracker_response resp;
+				udp_connect_response resp;
 				resp.action = action_connect;
 				resp.connection_id = generate_connection_id(&from);
 				resp.transaction_id = hdr->transaction_id;
 				if (respond(udp_socket, (char*)&resp, sizeof(resp), (sockaddr*)&from, fromlen))
 					return 0;
 				break;
+			}
 			case action_announce:
+			{
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
 					// log error
 					continue;
 				}
+				if (size < sizeof(udp_announce_message))
+				{
+					// log incorrect packet
+					continue;
+				}
+
+				pthread_rwlock_rdlock(&swarm_mutex);
+				swarm_map_t::iterator i = swarms.find(hdr->hash);
+				swarm* s = 0;
+				if (i != swarms.end())
+				{
+					s = i->second;
+				}
+				pthread_rwlock_unlock(&swarm_mutex);
+
+				if (s == 0)
+				{
+					// the swarm doesn't exist, we need to add it
+					s = new swarm;
+
+					pthread_rwlock_wrlock(&swarm_mutex);
+					swarms.insert(std::make_pair(hdr->hash, s));
+					pthread_rwlock_unlock(&swarm_mutex);
+				}
+
+				char* buf;
+				int len;
+				iovec iov[2];
+				msghdr msg;
+				udp_announce_response resp;
+
+				resp.action = action_announce;
+				resp.connection_id = hdr->connection_id;
+				resp.transaction_id = hdr->transaction_id;
+				resp.interval = 1680 + rand() * 240 / RAND_MAX;
+
+				msg.msg_name = (void*)&from;
+				msg.msg_namelen = fromlen;
+				msg.msg_iov = iov;
+				msg.msg_iovlen = 2;
+				msg.msg_control = 0;
+				msg.msg_controllen = 0;
+				msg.msg_flags = 0;
+
+				iov[0].iov_base = &resp;
+				iov[0].iov_len = sizeof(resp);
+
+				swarm_lock l(*s);
+				s->announce(hdr, &from, &buf, &len, &resp.downloaders, &resp.seeds);
+
+				iov[1].iov_base = buf;
+				iov[1].iov_len = len;
+
+				// silly loop just to deal with the potential EINTR
+				do
+				{
+					int r = sendmsg(udp_socket, &msg, MSG_NOSIGNAL);
+					if (r == -1)
+					{
+						if (errno == EINTR) continue;
+						fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
+						return 0;
+					}
+				} while (false);
 				break;
+			}
 			case action_scrape:
+			{
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
 					// log error
 					continue;
 				}
+				if (size < 16 + 20)
+				{
+					// log error
+					continue;
+				}
+
+				// if someone sent a very large scrape request, only
+				// respond to the first ones. We don't want to lock
+				// too many swarms for just one response
+				int num_hashes = (std::min)((size - 16) / 20, int(max_scrape_responses));
+
+				udp_scrape_message* req = (udp_scrape_message*)buffer;
+
+				udp_scrape_response resp;
+				resp.action = action_announce;
+				resp.connection_id = hdr->connection_id;
+				resp.transaction_id = hdr->transaction_id;
+
+				pthread_rwlock_rdlock(&swarm_mutex);
+				for (int i = 0; i < num_hashes; ++i)
+				{
+					swarm_map_t::iterator j = swarms.find(req->hash[i]);
+					if (j != swarms.end())
+					{
+						swarm* s = j->second;
+						swarm_lock l(*s);
+						s->scrape(&resp.data[i].seeds, &resp.data[i].download_count
+							, &resp.data[i].downloaders);
+					}
+				}
+				pthread_rwlock_unlock(&swarm_mutex);
+
+				if (respond(udp_socket, (char*)&resp, 16 + num_hashes * 20, (sockaddr*)&from, fromlen))
+					return 0;
+
 				break;
+			}
 			default:
 				continue;
 		}
@@ -188,6 +274,13 @@ int main(int argc, char* argv[])
 	if (r == -1)
 	{
 		fprintf(stderr, "sigprocmask failed (%d): %s\n", errno, strerror(errno));
+	}
+
+	r = pthread_rwlock_init(&swarm_mutex, 0);
+	if (r != 0)
+	{
+		fprintf(stderr, "pthread_rwlock_init failed (%d): %s\n", r, strerror(r));
+		exit(EXIT_FAILURE);
 	}
 
 	udp_socket = socket(PF_INET, SOCK_DGRAM, 0);
@@ -253,6 +346,8 @@ int main(int argc, char* argv[])
 	}
 
 	free(threads);
+
+	pthread_rwlock_destroy(&swarm_mutex);
 
 	return EXIT_SUCCESS;
 }
