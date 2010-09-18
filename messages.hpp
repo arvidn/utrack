@@ -38,7 +38,7 @@ struct udp_announce_message
 	uint32_t action;
 	uint32_t transaction_id;
 	sha1_hash hash;
-	uint8_t peer_id[20];
+	sha1_hash peer_id;
 	int64_t downloaded;
 	int64_t left;
 	int64_t uploaded;

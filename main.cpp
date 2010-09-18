@@ -38,6 +38,9 @@ Copyright (C) 2010  Arvid Norberg
 #define MSG_NOSIGNAL 0
 #endif
 
+// TODO: TEMP
+#define ntohll(x) (x)
+
 // this is the UDP socket we accept tracker announces to
 int udp_socket = -1;
 
@@ -76,7 +79,7 @@ bool respond(int socket, char const* buf, int len, sockaddr const* to, socklen_t
 {
 	ssize_t ret = 0;
 retry_send:
-	ret = sendto(udp_socket, buf, len, MSG_NOSIGNAL, to, tolen);
+	ret = sendto(socket, buf, len, MSG_NOSIGNAL, to, tolen);
 	if (ret == -1)
 	{
 		if (errno == EINTR) goto retry_send;
@@ -103,9 +106,11 @@ void* tracker_thread(void* arg)
 			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
 			break;
 		}
+		printf("received message\n");
 
 		if (size < 16)
 		{
+			printf("packet too short\n");
 			// log incorrect packet
 			continue;
 		}
@@ -116,8 +121,10 @@ void* tracker_thread(void* arg)
 		{
 			case action_connect:
 			{
-				if (hdr->connection_id != 0x41727101980LL)
+				printf("connect\n");
+				if (ntohll(hdr->connection_id) != 0x41727101980LL)
 				{
+					printf("invalid connection_id for connection packet\n");
 					// log error
 					continue;
 				}
@@ -131,13 +138,16 @@ void* tracker_thread(void* arg)
 			}
 			case action_announce:
 			{
+				printf("announce\n");
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
+					printf("invalid connection_id\n");
 					// log error
 					continue;
 				}
 				if (size < sizeof(udp_announce_message))
 				{
+					printf("packet too short\n");
 					// log incorrect packet
 					continue;
 				}
@@ -204,13 +214,16 @@ void* tracker_thread(void* arg)
 			}
 			case action_scrape:
 			{
+				printf("scrape\n");
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
+					printf("invalid connection_id\n");
 					// log error
 					continue;
 				}
 				if (size < 16 + 20)
 				{
+					printf("packet too short\n");
 					// log error
 					continue;
 				}
@@ -292,7 +305,8 @@ int main(int argc, char* argv[])
 	}
 
 	sockaddr_in addr;
-	memset(&addr, 0, sizeof(sockaddr_in));
+	memset(&addr, 0, sizeof(addr));
+	addr.sin_len = sizeof(addr);
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = INADDR_ANY;
 	addr.sin_port = htons(listen_port);

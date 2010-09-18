@@ -10,11 +10,17 @@
 
 struct peer_ip4
 {
-	peer_ip4(sockaddr_in const* addr)
+	peer_ip4(sockaddr_in const* addr, uint16_t p)
 	{
 		// sockaddr is always big endian (network byte order)
 		memcpy(&ip, &addr->sin_addr, sizeof(ip));
-		memcpy(&port, &addr->sin_port, sizeof(port));
+		memcpy(&port, &p, sizeof(port));
+	}
+	uint32_t ip4() const
+	{
+		uint32_t ret;
+		memcpy(&ret, ip, sizeof(ip));
+		return ret;
 	}
 	// split up in uint16 to get
 	// the compact layout
@@ -49,8 +55,13 @@ struct swarm
 		, uint32_t* downloaders, uint32_t* seeds);
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
 private:
+
+	typedef hash_map<uint32_t, peer_entry> hash_map4_t;
+
 	void lock();
 	void unlock();
+
+	void erase_peer(swarm::hash_map4_t::iterator i);
 
 	uint32_t m_seeds;
 	uint32_t m_downloaders;
@@ -61,7 +72,6 @@ private:
 	time_t m_last_announce;
 
 	// hash table of all peers keyed on their IP
-	typedef hash_map<uint32_t, peer_entry> hash_map4_t;
 	hash_map4_t m_peers4;
 
 	// compact array of all peers' IPs

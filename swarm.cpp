@@ -41,13 +41,24 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 	*seeds = m_seeds;
 	*downloaders = m_downloaders;
 
+	time_t now = time(0);
+	m_last_announce = now;
+
 	hash_map4_t::iterator i = m_peers4.find(from->sin_addr.s_addr);
 
 	if (i == m_peers4.end())
 	{
+		if (hdr->event == event_stopped)
+		{
+			// we don't have this peer in the list, and it
+			// just sent stopped. Don't do anything
+			*buf = 0;
+			*len = 0;
+			return;
+		}
 		// insert this peer
 		peer_entry e;
-		e.last_announce = time(0);
+		e.last_announce = now;
 		e.index = m_ips4.size();
 		e.key = hdr->key;
 		if (hdr->event == event_completed)
@@ -66,7 +77,7 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 			++m_seeds;
 		}
 
-		m_ips4.push_back(peer_ip4(from));
+		m_ips4.push_back(peer_ip4(from, hdr->port));
 		std::pair<hash_map4_t::iterator, bool> ret = m_peers4.insert(
 			std::make_pair(from->sin_addr.s_addr, e));
 		i = ret.first;
@@ -74,7 +85,7 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 	else
 	{
 		peer_entry& e = i->second;
-		e.last_announce = time(0);
+		e.last_announce = now;
 		// TODO: should we prevent peers to change key like this?
 		e.key = hdr->key;
 
@@ -99,9 +110,23 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 			--m_seeds;
 			++m_downloaders;
 		}
+
+		// the port might have changed
+		m_ips4[e.index] = peer_ip4(from, hdr->port);
+	}
+
+	if (hdr->event == event_stopped)
+	{
+		// remove the peer from the list and don't
+		// return any peers
+		erase_peer(i);
+		*buf = 0;
+		*len = 0;
+		return;
 	}
 
 	int num_want = (std::min)((std::min)(size_t(200), m_ips4.size()), size_t(hdr->num_want));
+
 	if (num_want == 0)
 	{
 		*buf = 0;
@@ -123,5 +148,24 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 			*len = (m_ips4.size() - random) * sizeof(peer_ip4);
 		}
 	}
+}
+
+void swarm::erase_peer(swarm::hash_map4_t::iterator i)
+{
+	peer_entry& e = i->second;
+	
+	// swap the last entry in the peer IPs array
+	// with the one we're removing
+	hash_map4_t::iterator last = m_peers4.find(m_ips4.back().ip4());
+	assert(i != m_peers4.end());
+
+	last->second.index = e.index;
+	m_ips4[e.index] = m_ips4.back();
+
+	// and then remove the last entry
+	m_ips4.pop_back();
+
+	// and finally remove the peer_entry
+	m_peers4.erase(i);
 }
 
