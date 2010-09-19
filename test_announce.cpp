@@ -20,6 +20,7 @@ Copyright (C) 2010  Arvid Norberg
 #include <sys/socket.h>
 #include <sys/errno.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <openssl/sha.h>
 #include <unistd.h>
 #include <signal.h>
@@ -110,7 +111,7 @@ void* announce_thread(void* arg)
 
 		printf("waiting for response: %d\n", i);
 		sockaddr from;
-		socklen_t fromlen;
+		socklen_t fromlen = sizeof(from);
 		r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
 		if (r == -1)
 		{
@@ -127,6 +128,7 @@ void* announce_thread(void* arg)
 
 		int ih = rand() % (sizeof(info_hashes) / sizeof(info_hashes[0]));
 		req.connection_id = resp->connection_id;
+		req.action = action_announce;
 		req.transaction_id = (rand() << 16) ^ rand();
 		req.hash = info_hashes[ih];
 		req.peer_id = random_hash();
@@ -162,7 +164,13 @@ done:
 
 int main(int argc, char* argv[])
 {
-	int num_threads = 4;
+	if (argc < 3)
+	{
+		fprintf(stderr, "usage: ./udp_test address port\n");
+		return EXIT_FAILURE;
+	}
+
+	int num_threads = 1;
 
 	for (int i = 0; i < sizeof(info_hashes)/sizeof(info_hashes[0]); ++i)
 	{
@@ -172,14 +180,20 @@ int main(int argc, char* argv[])
 	memset(&to, 0, sizeof(to));
 	to.sin_len = sizeof(to);
 	to.sin_family = AF_INET;
-	to.sin_addr.s_addr = INADDR_LOOPBACK;
-	to.sin_port = htons(8080);
+	int r = inet_pton(AF_INET, argv[1], &to.sin_addr);
+	if (r < 0)
+	{
+		fprintf(stderr, "invalid target address \"%s\" (%d): %s\n", argv[1]
+			, errno, strerror(errno));
+		return EXIT_FAILURE;
+	}
+	to.sin_port = htons(atoi(argv[2]));
 
 	pthread_t* threads = (pthread_t*)malloc(sizeof(pthread_t) * num_threads);
 	if (threads == NULL)
 	{
 		fprintf(stderr, "failed allocate thread list (no memory)\n");
-		exit(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	}
 
 	// create threads
@@ -190,7 +204,7 @@ int main(int argc, char* argv[])
 		if (r != 0)
 		{
 			fprintf(stderr, "failed to create thread (%d): %s\n", r, strerror(r));
-			exit(EXIT_FAILURE);
+			return EXIT_FAILURE;
 		}
 	}
 

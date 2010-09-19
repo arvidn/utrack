@@ -97,7 +97,7 @@ void* tracker_thread(void* arg)
 
 	for (;;)
 	{
-		socklen_t fromlen;
+		socklen_t fromlen = sizeof(from);
 		int size = recvfrom(udp_socket, (char*)buffer, sizeof(buffer), 0
 			, (sockaddr*)&from, &fromlen);
 		if (size == -1)
@@ -106,11 +106,12 @@ void* tracker_thread(void* arg)
 			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
 			break;
 		}
-		printf("received message\n");
+
+//		printf("received message from: %x port: %d size: %d\n"
+//			, from.sin_addr.s_addr, ntohs(from.sin_port), size);
 
 		if (size < 16)
 		{
-			printf("packet too short\n");
 			// log incorrect packet
 			continue;
 		}
@@ -121,10 +122,8 @@ void* tracker_thread(void* arg)
 		{
 			case action_connect:
 			{
-				printf("connect\n");
 				if (ntohll(hdr->connection_id) != 0x41727101980LL)
 				{
-					printf("invalid connection_id for connection packet\n");
 					// log error
 					continue;
 				}
@@ -138,16 +137,13 @@ void* tracker_thread(void* arg)
 			}
 			case action_announce:
 			{
-				printf("announce\n");
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
-					printf("invalid connection_id\n");
 					// log error
 					continue;
 				}
 				if (size < sizeof(udp_announce_message))
 				{
-					printf("packet too short\n");
 					// log incorrect packet
 					continue;
 				}
@@ -214,16 +210,13 @@ void* tracker_thread(void* arg)
 			}
 			case action_scrape:
 			{
-				printf("scrape\n");
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
-					printf("invalid connection_id\n");
 					// log error
 					continue;
 				}
 				if (size < 16 + 20)
 				{
-					printf("packet too short\n");
 					// log error
 					continue;
 				}
@@ -279,7 +272,7 @@ int main(int argc, char* argv[])
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
 	int listen_port = 8080;
-	int num_threads = 4;
+	int num_threads = 1;
 
 	sigset_t sig;
 	sigfillset(&sig);
