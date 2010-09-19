@@ -35,7 +35,7 @@ void swarm::scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* download
 	*downloaders = m_downloaders;
 }
 
-void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** buf, int* len
+void swarm::announce(udp_announce_message* hdr, char** buf, int* len
 	, uint32_t* downloaders, uint32_t* seeds)
 {
 	*seeds = m_seeds;
@@ -44,11 +44,11 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 	time_t now = time(0);
 	m_last_announce = now;
 
-	hash_map4_t::iterator i = m_peers4.find(from->sin_addr.s_addr);
+	hash_map4_t::iterator i = m_peers4.find(hdr->ip);
 
 	if (i == m_peers4.end())
 	{
-		if (hdr->event == event_stopped)
+		if (ntohl(hdr->event) == event_stopped)
 		{
 			// we don't have this peer in the list, and it
 			// just sent stopped. Don't do anything
@@ -61,12 +61,12 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 		e.last_announce = now;
 		e.index = m_ips4.size();
 		e.key = hdr->key;
-		if (hdr->event == event_completed)
+		if (ntohl(hdr->event) == event_completed)
 		{
 			e.complete = true;
 			++m_download_count;
 		}
-		if (hdr->left > 0)
+		if (ntohl(hdr->left) > 0)
 		{
 			e.downloading = true;
 			++m_downloaders;
@@ -77,9 +77,9 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 			++m_seeds;
 		}
 
-		m_ips4.push_back(peer_ip4(from, hdr->port));
+		m_ips4.push_back(peer_ip4(hdr->ip, hdr->port));
 		std::pair<hash_map4_t::iterator, bool> ret = m_peers4.insert(
-			std::make_pair(from->sin_addr.s_addr, e));
+			std::make_pair(hdr->ip, e));
 		i = ret.first;
 	}
 	else
@@ -90,20 +90,20 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 		e.key = hdr->key;
 
 		// this peer just completed (and hasn't sent complete before)
-		if (hdr->event == event_completed && !e.complete)
+		if (ntohl(hdr->event) == event_completed && !e.complete)
 		{
 			e.complete = true;
 			++m_download_count;
 		}
 
-		if (hdr->left == 0 && e.downloading)
+		if (ntohl(hdr->left) == 0 && e.downloading)
 		{
 			// this peer just became a seed
 			e.downloading = false;
 			--m_downloaders;
 			++m_seeds;
 		}
-		else if (hdr->left > 0 && !e.downloading)
+		else if (ntohl(hdr->left) > 0 && !e.downloading)
 		{
 			// this peer just reverted to being a downloader (somehow)
 			e.downloading = true;
@@ -112,10 +112,10 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 		}
 
 		// the port might have changed
-		m_ips4[e.index] = peer_ip4(from, hdr->port);
+		m_ips4[e.index] = peer_ip4(hdr->ip, hdr->port);
 	}
 
-	if (hdr->event == event_stopped)
+	if (ntohl(hdr->event) == event_stopped)
 	{
 		// remove the peer from the list and don't
 		// return any peers
@@ -125,9 +125,10 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 		return;
 	}
 
-	int num_want = (std::min)((std::min)(size_t(200), m_ips4.size()), size_t(hdr->num_want));
+	size_t num_want = (std::min)((std::min)(size_t(200)
+		, size_t(m_ips4.size())), size_t(ntohl(hdr->num_want)));
 
-	if (num_want == 0)
+	if (num_want <= 0)
 	{
 		*buf = 0;
 		*len = 0;
@@ -145,7 +146,7 @@ void swarm::announce(udp_announce_message* hdr, sockaddr_in const* from, char** 
 			// TODO: this is sub-optimal since it doesn't wrap
 			int random = rand() % m_ips4.size();
 			*buf = (char*)&m_ips4[random];
-			*len = (m_ips4.size() - random) * sizeof(peer_ip4);
+			*len = (std::min)(m_ips4.size() - random, num_want) * sizeof(peer_ip4);
 		}
 	}
 }
@@ -164,6 +165,9 @@ void swarm::erase_peer(swarm::hash_map4_t::iterator i)
 
 	// and then remove the last entry
 	m_ips4.pop_back();
+
+	if (e.downloading) --m_downloaders;
+	else --m_seeds;
 
 	// and finally remove the peer_entry
 	m_peers4.erase(i);

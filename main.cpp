@@ -41,6 +41,11 @@ Copyright (C) 2010  Arvid Norberg
 // TODO: TEMP
 #define ntohll(x) (x)
 
+// if this is true, we allow peers to set which IP
+// they will announce as. This is off by default since
+// it allows for spoofing
+bool allow_alternate_ip = false;
+
 // this is the UDP socket we accept tracker announces to
 int udp_socket = -1;
 
@@ -118,7 +123,7 @@ void* tracker_thread(void* arg)
 
 		udp_announce_message* hdr = (udp_announce_message*)buffer;
 
-		switch (hdr->action)
+		switch (ntohl(hdr->action))
 		{
 			case action_connect:
 			{
@@ -128,7 +133,7 @@ void* tracker_thread(void* arg)
 					continue;
 				}
 				udp_connect_response resp;
-				resp.action = action_connect;
+				resp.action = htonl(action_connect);
 				resp.connection_id = generate_connection_id(&from);
 				resp.transaction_id = hdr->transaction_id;
 				if (respond(udp_socket, (char*)&resp, sizeof(resp), (sockaddr*)&from, fromlen))
@@ -147,6 +152,9 @@ void* tracker_thread(void* arg)
 					// log incorrect packet
 					continue;
 				}
+
+				if (!allow_alternate_ip || hdr->ip == 0)
+					hdr->ip = from.sin_addr.s_addr;
 
 				pthread_rwlock_rdlock(&swarm_mutex);
 				swarm_map_t::iterator i = swarms.find(hdr->hash);
@@ -173,10 +181,10 @@ void* tracker_thread(void* arg)
 				msghdr msg;
 				udp_announce_response resp;
 
-				resp.action = action_announce;
+				resp.action = htonl(action_announce);
 				resp.connection_id = hdr->connection_id;
 				resp.transaction_id = hdr->transaction_id;
-				resp.interval = 1680 + rand() * 240 / RAND_MAX;
+				resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
 
 				msg.msg_name = (void*)&from;
 				msg.msg_namelen = fromlen;
@@ -190,7 +198,9 @@ void* tracker_thread(void* arg)
 				iov[0].iov_len = sizeof(resp);
 
 				swarm_lock l(*s);
-				s->announce(hdr, &from, &buf, &len, &resp.downloaders, &resp.seeds);
+				s->announce(hdr, &buf, &len, &resp.downloaders, &resp.seeds);
+				resp.downloaders = htonl(resp.downloaders);
+				resp.seeds = htonl(resp.seeds);
 
 				iov[1].iov_base = buf;
 				iov[1].iov_len = len;
@@ -229,7 +239,7 @@ void* tracker_thread(void* arg)
 				udp_scrape_message* req = (udp_scrape_message*)buffer;
 
 				udp_scrape_response resp;
-				resp.action = action_announce;
+				resp.action = htonl(action_scrape);
 				resp.connection_id = hdr->connection_id;
 				resp.transaction_id = hdr->transaction_id;
 
@@ -243,6 +253,9 @@ void* tracker_thread(void* arg)
 						swarm_lock l(*s);
 						s->scrape(&resp.data[i].seeds, &resp.data[i].download_count
 							, &resp.data[i].downloaders);
+						resp.data[i].seeds = htonl(resp.data[i].seeds);
+						resp.data[i].download_count = htonl(resp.data[i].download_count);
+						resp.data[i].downloaders = htonl(resp.data[i].downloaders);
 					}
 				}
 				pthread_rwlock_unlock(&swarm_mutex);
@@ -261,6 +274,9 @@ void* tracker_thread(void* arg)
 
 int main(int argc, char* argv[])
 {
+	// TODO: TEMP!
+	allow_alternate_ip = true;
+
 	// initialize secret key which the connection-ids are built off of
 	uint64_t secret_key = 0;
 	for (int i = 0; i < sizeof(secret_key); ++i)
@@ -272,7 +288,7 @@ int main(int argc, char* argv[])
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
 	int listen_port = 8080;
-	int num_threads = 1;
+	int num_threads = 4;
 
 	sigset_t sig;
 	sigfillset(&sig);
@@ -286,7 +302,7 @@ int main(int argc, char* argv[])
 	if (r != 0)
 	{
 		fprintf(stderr, "pthread_rwlock_init failed (%d): %s\n", r, strerror(r));
-		exit(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	}
 
 	udp_socket = socket(PF_INET, SOCK_DGRAM, 0);
@@ -294,7 +310,7 @@ int main(int argc, char* argv[])
 	{
 		fprintf(stderr, "failed to open socket (%d): %s\n"
 			, errno, strerror(errno));
-		exit(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	}
 
 	sockaddr_in addr;
@@ -308,14 +324,14 @@ int main(int argc, char* argv[])
 	{
 		fprintf(stderr, "failed to bind socket to port %d (%d): %s\n"
 			, listen_port, errno, strerror(errno));
-		exit(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	}
 	
 	pthread_t* threads = (pthread_t*)malloc(sizeof(pthread_t) * num_threads);
 	if (threads == NULL)
 	{
 		fprintf(stderr, "failed allocate thread list (no memory)\n");
-		exit(EXIT_FAILURE);
+		return EXIT_FAILURE;
 	}
 
 	// create threads
@@ -326,7 +342,7 @@ int main(int argc, char* argv[])
 		if (r != 0)
 		{
 			fprintf(stderr, "failed to create thread (%d): %s\n", r, strerror(r));
-			exit(EXIT_FAILURE);
+			return EXIT_FAILURE;
 		}
 	}
 

@@ -66,12 +66,93 @@ sha1_hash random_hash()
 	return ret;
 }
 
-sha1_hash info_hashes[100];
+int announce_one_peer(int s, uint32_t ip, sha1_hash const& ih, int event, int action)
+{
+//	printf("announcing %x on swarm %x event %d\n", ip, ih.val[0], event);
+
+	// use uint64_t to make the buffer properly aligned
+	uint64_t buffer[1500/8];
+
+	udp_announce_message req;
+	req.action = htonl(action_connect);
+	req.connection_id = htonll(0x41727101980LL);
+	req.transaction_id = (rand() << 16) ^ rand();
+
+	if (send(s, (char*)&req, 16, (sockaddr*)&to, sizeof(to)))
+		return 1;
+
+	sockaddr from;
+	socklen_t fromlen = sizeof(from);
+	int r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
+	if (r == -1)
+	{
+		fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
+		return 1;
+	}
+
+	udp_connect_response* resp = (udp_connect_response*)buffer;
+
+	if (req.transaction_id != resp->transaction_id)
+		fprintf(stderr, "invalid transaction ID in response\n");
+
+	req.connection_id = resp->connection_id;
+	req.action = htonl(action);
+	req.transaction_id = (rand() << 16) ^ rand();
+	req.hash = ih;
+
+	int len = sizeof(req);
+	if (action == action_scrape)
+	{
+		len = 16 + 20;
+	}
+	else
+	{
+		req.peer_id = random_hash();
+		req.downloaded = 0;
+		req.left = event == event_started ? htonl(1000) : 0;
+		req.uploaded = 0;
+		req.event = htonl(event);
+		req.ip = ip;
+		req.key = rand();
+		req.num_want = htonl(200);
+		req.port = rand();
+		req.extensions = 0;
+	}
+
+	if (send(s, (char*)&req, len, (sockaddr*)&to, sizeof(to)))
+		return 1;
+
+	r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
+	if (r == -1)
+	{
+		fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
+		return 1;
+	}
+
+	if (action == action_scrape)
+	{
+		udp_scrape_response* scr = (udp_scrape_response*)buffer;
+		printf("scrape response h: %x d: %u s: %u c: %u\n", ih.val[0]
+			, ntohl(scr->data[0].downloaders)
+			, ntohl(scr->data[0].seeds)
+			, ntohl(scr->data[0].download_count));
+	}
+	return 0;
+}
 
 void* announce_thread(void* arg)
 {
-	// use uint64_t to make the buffer properly aligned
-	uint64_t buffer[1500/8];
+	sha1_hash info_hashes[100];
+	for (int i = 0; i < sizeof(info_hashes)/sizeof(info_hashes[0]); ++i)
+	{
+		info_hashes[i] = random_hash();
+	}
+
+	uint32_t peer_ips[500];
+	for (int i = 0; i < sizeof(peer_ips)/sizeof(peer_ips[0]); ++i)
+	{
+		peer_ips[i] = (rand() << 16) ^ rand();
+	}
 
 	int s = socket(PF_INET, SOCK_DGRAM, 0);
 	if (s < 0)
@@ -97,61 +178,18 @@ void* announce_thread(void* arg)
 		return 0;
 	}
 
-	for (int i = 0; i < 10000; ++i)
+	int events[] = { event_started, event_completed, event_stopped };
+
+	for (int e = 0; e < 3; ++e)
 	{
-		udp_announce_message req;
-		req.action = action_connect;
-		req.connection_id = htonll(0x41727101980LL);
-		req.transaction_id = (rand() << 16) ^ rand();
-
-		printf("connecting: %d\n", i);
-
-		if (send(s, (char*)&req, 16, (sockaddr*)&to, sizeof(to)))
-			goto done;
-
-		printf("waiting for response: %d\n", i);
-		sockaddr from;
-		socklen_t fromlen = sizeof(from);
-		r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
-		if (r == -1)
+		printf("event: %d\n", e);
+		for (int ih = 0; ih < sizeof(info_hashes)/sizeof(info_hashes[0]); ++ih)
 		{
-			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
-			goto done;
-		}
-
-		udp_connect_response* resp = (udp_connect_response*)buffer;
-
-		printf("connected: %llu\n", resp->connection_id);
-
-		if (req.transaction_id != resp->transaction_id)
-			fprintf(stderr, "invalid transaction ID in response\n");
-
-		int ih = rand() % (sizeof(info_hashes) / sizeof(info_hashes[0]));
-		req.connection_id = resp->connection_id;
-		req.action = action_announce;
-		req.transaction_id = (rand() << 16) ^ rand();
-		req.hash = info_hashes[ih];
-		req.peer_id = random_hash();
-		req.downloaded = 0;
-		req.left = 1000;
-		req.uploaded = 0;
-		req.event = event_started;
-		req.ip = 0;
-		req.key = rand();
-		req.num_want = 200;
-		req.port = rand();
-		req.extensions = 0;
-		
-		printf("announcing to hash: %d\n", ih);
-
-		if (send(s, (char*)&req, sizeof(req), (sockaddr*)&to, sizeof(to)))
-			goto done;
-
-		r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
-		if (r == -1)
-		{
-			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
-			goto done;
+			for (int peer = 0; peer < sizeof(peer_ips)/sizeof(peer_ips[0]); ++peer)
+			{
+				announce_one_peer(s, peer_ips[peer], info_hashes[ih], events[e], action_announce);
+			}
+			announce_one_peer(s, peer_ips[0], info_hashes[ih], event_stopped, action_scrape);
 		}
 	}
 
@@ -170,12 +208,7 @@ int main(int argc, char* argv[])
 		return EXIT_FAILURE;
 	}
 
-	int num_threads = 1;
-
-	for (int i = 0; i < sizeof(info_hashes)/sizeof(info_hashes[0]); ++i)
-	{
-		info_hashes[i] = random_hash();
-	}
+	int num_threads = 4;
 
 	memset(&to, 0, sizeof(to));
 	to.sin_len = sizeof(to);

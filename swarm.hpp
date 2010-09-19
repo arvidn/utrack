@@ -10,10 +10,10 @@
 
 struct peer_ip4
 {
-	peer_ip4(sockaddr_in const* addr, uint16_t p)
+	peer_ip4(uint32_t addr, uint16_t p)
 	{
-		// sockaddr is always big endian (network byte order)
-		memcpy(&ip, &addr->sin_addr, sizeof(ip));
+		// addr is always big endian (network byte order)
+		memcpy(&ip, &addr, sizeof(ip));
 		memcpy(&port, &p, sizeof(port));
 	}
 	uint32_t ip4() const
@@ -51,7 +51,7 @@ struct swarm
 
 	swarm();
 	~swarm();
-	void announce(udp_announce_message* hdr, sockaddr_in const* from, char** buf, int* len
+	void announce(udp_announce_message* hdr, char** buf, int* len
 		, uint32_t* downloaders, uint32_t* seeds);
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
 private:
