@@ -158,6 +158,7 @@ void* tracker_thread(void* arg)
 				if (ntohll(hdr->connection_id) != 0x41727101980LL)
 				{
 					__sync_fetch_and_add(&errors, 1);
+					printf("invalid connection ID for connect message\n");
 					// log error
 					continue;
 				}
@@ -166,7 +167,7 @@ void* tracker_thread(void* arg)
 				resp.connection_id = generate_connection_id(&from);
 				resp.transaction_id = hdr->transaction_id;
 				__sync_fetch_and_add(&connects, 1);
-				if (respond(udp_socket, (char*)&resp, sizeof(resp), (sockaddr*)&from, fromlen))
+				if (respond(udp_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
 					return 0;
 				break;
 			}
@@ -174,12 +175,14 @@ void* tracker_thread(void* arg)
 			{
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
+					printf("invalid connection ID\n");
 					__sync_fetch_and_add(&errors, 1);
 					// log error
 					continue;
 				}
-				if (size < sizeof(udp_announce_message))
+				if (size < 100)
 				{
+					printf("announce packet too short. Expected 100, got %d\n", size);
 					__sync_fetch_and_add(&errors, 1);
 					// log incorrect packet
 					continue;
@@ -228,7 +231,7 @@ void* tracker_thread(void* arg)
 				msg.msg_flags = 0;
 
 				iov[0].iov_base = &resp;
-				iov[0].iov_len = sizeof(resp);
+				iov[0].iov_len = 24;
 
 				swarm_lock l(*s);
 				s->announce(hdr, &buf, &len, &resp.downloaders, &resp.seeds);
@@ -256,12 +259,14 @@ void* tracker_thread(void* arg)
 			{
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
+					printf("invalid connection ID for connect message\n");
 					__sync_fetch_and_add(&errors, 1);
 					// log error
 					continue;
 				}
 				if (size < 16 + 20)
 				{
+					printf("scrape packet too short. Expected 36, got %d\n", size);
 					__sync_fetch_and_add(&errors, 1);
 					// log error
 					continue;
@@ -304,6 +309,7 @@ void* tracker_thread(void* arg)
 				break;
 			}
 			default:
+				printf("unknown action %d\n", ntohl(hdr->action));
 				__sync_fetch_and_add(&errors, 1);
 				break;
 		}
