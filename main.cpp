@@ -38,8 +38,20 @@ Copyright (C) 2010  Arvid Norberg
 #define MSG_NOSIGNAL 0
 #endif
 
-// TODO: TEMP
-#define ntohll(x) (x)
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+uint64_t ntohll(uint64_t x)
+{
+	uint64_t ret;
+	uint8_t* d = ((uint8_t*)&ret) + 7;
+	uint8_t* s = (uint8_t*)&x;
+	
+	for (int i = 0; i < sizeof(x); ++i, --d, ++s)
+		*d = *s;
+	return ret;
+}
+#else
+#define ntohll(x) x
+#endif
 
 // if this is true, we allow peers to set which IP
 // they will announce as. This is off by default since
@@ -180,7 +192,10 @@ void* tracker_thread(void* arg)
 					// log error
 					continue;
 				}
-				if (size < 100)
+				// technically the announce message should
+				// be 100 bytes, but uTorrent doesn't seem to send
+				// the extension field at the end
+				if (size < 98)
 				{
 					printf("announce packet too short. Expected 100, got %d\n", size);
 					__sync_fetch_and_add(&errors, 1);
@@ -218,7 +233,6 @@ void* tracker_thread(void* arg)
 				udp_announce_response resp;
 
 				resp.action = htonl(action_announce);
-				resp.connection_id = hdr->connection_id;
 				resp.transaction_id = hdr->transaction_id;
 				resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
 
@@ -231,7 +245,7 @@ void* tracker_thread(void* arg)
 				msg.msg_flags = 0;
 
 				iov[0].iov_base = &resp;
-				iov[0].iov_len = 24;
+				iov[0].iov_len = 20;
 
 				swarm_lock l(*s);
 				s->announce(hdr, &buf, &len, &resp.downloaders, &resp.seeds);
@@ -240,6 +254,7 @@ void* tracker_thread(void* arg)
 
 				iov[1].iov_base = buf;
 				iov[1].iov_len = len;
+				fprintf(stderr, "sending %d bytes payload\n", len);
 
 				// silly loop just to deal with the potential EINTR
 				do
@@ -283,7 +298,6 @@ void* tracker_thread(void* arg)
 
 				udp_scrape_response resp;
 				resp.action = htonl(action_scrape);
-				resp.connection_id = hdr->connection_id;
 				resp.transaction_id = hdr->transaction_id;
 
 				pthread_rwlock_rdlock(&swarm_mutex);
@@ -303,7 +317,7 @@ void* tracker_thread(void* arg)
 				}
 				pthread_rwlock_unlock(&swarm_mutex);
 
-				if (respond(udp_socket, (char*)&resp, 16 + num_hashes * 20, (sockaddr*)&from, fromlen))
+				if (respond(udp_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
 					return 0;
 
 				break;
@@ -327,6 +341,8 @@ int main(int argc, char* argv[])
 	// TODO: TEMP!
 	allow_alternate_ip = true;
 
+	printf("peer_ip4: %d\n", sizeof(peer_ip4));
+
 	// initialize secret key which the connection-ids are built off of
 	uint64_t secret_key = 0;
 	for (int i = 0; i < sizeof(secret_key); ++i)
@@ -338,7 +354,7 @@ int main(int argc, char* argv[])
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
 	int listen_port = 8080;
-	int num_threads = 4;
+	int num_threads = 1;
 
 	int r = pthread_rwlock_init(&swarm_mutex, 0);
 	if (r != 0)
@@ -413,7 +429,7 @@ int main(int argc, char* argv[])
 
 	while (!quit)
 	{
-		usleep(1000000);
+		usleep(60000000);
 		uint32_t last_connects = connects;
 		uint32_t last_announces = announces;
 		uint32_t last_scrapes = scrapes;

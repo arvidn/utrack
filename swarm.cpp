@@ -140,14 +140,14 @@ void swarm::announce(udp_announce_message* hdr, char** buf, int* len
 		{
 			// special case when we should send every peer
 			*buf = (char*)&m_ips4[0];
-			*len = m_ips4.size() * sizeof(peer_ip4);
+			*len = m_ips4.size() * 6;
 		}
 		else
 		{
 			// TODO: this is sub-optimal since it doesn't wrap
 			int random = rand() % m_ips4.size();
 			*buf = (char*)&m_ips4[random];
-			*len = (std::min)(m_ips4.size() - random, num_want) * sizeof(peer_ip4);
+			*len = (std::min)(m_ips4.size() - random, num_want) * 6;
 		}
 	}
 }

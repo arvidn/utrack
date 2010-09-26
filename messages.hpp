@@ -69,7 +69,6 @@ struct udp_announce_response
 {
 	uint32_t action;
 	uint32_t transaction_id;
-	uint64_t connection_id;
 	uint32_t interval;
 	uint32_t downloaders;
 	uint32_t seeds;
@@ -86,7 +85,6 @@ struct udp_scrape_response
 {
 	uint32_t action;
 	uint32_t transaction_id;
-	uint64_t connection_id;
 	udp_scrape_data data[71];
 };
 
