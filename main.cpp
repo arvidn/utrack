@@ -345,9 +345,7 @@ void sigint(int s)
 int main(int argc, char* argv[])
 {
 	// TODO: TEMP!
-	allow_alternate_ip = true;
-
-	printf("peer_ip4: %d\n", sizeof(peer_ip4));
+//	allow_alternate_ip = true;
 
 	next_to_purge = swarms.begin();
 
