@@ -58,6 +58,8 @@ uint64_t ntohll(uint64_t x)
 // it allows for spoofing
 bool allow_alternate_ip = false;
 
+int interval = 1800;
+
 // set to true when we're shutting down
 volatile bool quit = false;
 
@@ -77,6 +79,9 @@ pthread_rwlock_t swarm_mutex;
 typedef hash_map<sha1_hash, swarm*, sha1_hash_fun> swarm_map_t;
 swarm_map_t swarms;
 
+// round-robin for timing out peers
+swarm_map_t::iterator next_to_purge;
+
 // stats counters
 uint32_t connects = 0;
 uint32_t announces = 0;
@@ -95,6 +100,7 @@ void gen_secret_digest(sockaddr_in const* from, char* digest)
 
 uint64_t generate_connection_id(sockaddr_in const* from)
 {
+//#error add an option to use an insecure, cheap method
 	char digest[20];
 	gen_secret_digest(from, digest);
 	uint64_t ret;
@@ -343,6 +349,8 @@ int main(int argc, char* argv[])
 
 	printf("peer_ip4: %d\n", sizeof(peer_ip4));
 
+	next_to_purge = swarms.begin();
+
 	// initialize secret key which the connection-ids are built off of
 	uint64_t secret_key = 0;
 	for (int i = 0; i < sizeof(secret_key); ++i)
@@ -445,6 +453,26 @@ int main(int argc, char* argv[])
 		printf("c: %u a: %u s: %u e: %u in: %u kB out: %u kB\n"
 			, last_connects, last_announces, last_scrapes, last_errors
 			, last_bytes_in / 1000, last_bytes_out / 1000);
+
+		time_t now = time(0);
+
+		pthread_rwlock_rdlock(&swarm_mutex);
+		if (next_to_purge == swarms.end() && swarms.size() > 0)
+			next_to_purge = swarms.begin();
+
+		int num_to_purge = (std::min)(int(swarms.size()), 20);
+
+		for (int i = 0; i < num_to_purge; ++i)
+		{
+			if (next_to_purge == swarms.end()) next_to_purge = swarms.begin();
+			else ++next_to_purge;
+			if (next_to_purge == swarms.end()) break;
+
+			swarm* s = next_to_purge->second;
+			swarm_lock l(*s);
+			s->purge_stale(now);
+		}
+		pthread_rwlock_unlock(&swarm_mutex);
 	}
 
 	close(udp_socket);

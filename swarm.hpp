@@ -54,6 +54,9 @@ struct swarm
 	void announce(udp_announce_message* hdr, char** buf, int* len
 		, uint32_t* downloaders, uint32_t* seeds);
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
+
+	void purge_stale(time_t now);
+
 private:
 
 	typedef hash_map<uint32_t, peer_entry> hash_map4_t;
@@ -76,6 +79,11 @@ private:
 
 	// compact array of all peers' IPs
 	std::vector<peer_ip4> m_ips4;
+
+	// the last peer we checked for purgine stale peers
+	// this may be m_peers4.end(). It's used to not
+	// necessarily go through all peers in one go
+	hash_map4_t::iterator m_last_purge;
 
 	// swarm mutex, since it may be accessed
 	// by multiple threads, it needs to be locked

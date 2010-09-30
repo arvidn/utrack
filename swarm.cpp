@@ -12,6 +12,8 @@ swarm::swarm()
 	{
 		fprintf(stderr, "swarm failed to create mutex (%d): %s\n", r, strerror(r));
 	}
+
+	m_last_purge = m_peers4.end();
 }
 
 swarm::~swarm()
@@ -44,6 +46,20 @@ void swarm::announce(udp_announce_message* hdr, char** buf, int* len
 
 	time_t now = time(0);
 	m_last_announce = now;
+
+	// the interval setting
+	extern int interval;
+
+	if (m_last_purge == m_peers4.end() && !m_peers4.empty())
+		m_last_purge = m_peers4.begin();
+
+	// check the next peer for timeout
+	if (m_last_purge != m_peers4.end())
+	{
+		hash_map4_t::iterator i = m_last_purge++;
+		if (i->second.last_announce < now - interval - interval / 2)
+			erase_peer(i);
+	}
 
 	hash_map4_t::iterator i = m_peers4.find(hdr->ip);
 
@@ -154,6 +170,8 @@ void swarm::announce(udp_announce_message* hdr, char** buf, int* len
 
 void swarm::erase_peer(swarm::hash_map4_t::iterator i)
 {
+	if (i == m_last_purge) ++m_last_purge;
+
 	peer_entry& e = i->second;
 	
 	// swap the last entry in the peer IPs array
@@ -172,5 +190,27 @@ void swarm::erase_peer(swarm::hash_map4_t::iterator i)
 
 	// and finally remove the peer_entry
 	m_peers4.erase(i);
+}
+
+void swarm::purge_stale(time_t now)
+{
+	// the interval setting
+	extern int interval;
+
+	int num = (std::min)(200, int(m_peers4.size()));
+
+	for (int i = 0; i < num; ++i)
+	{
+		if (m_last_purge == m_peers4.end() && !m_peers4.empty())
+			m_last_purge = m_peers4.begin();
+
+		// check the next peer for timeout
+		if (m_last_purge != m_peers4.end())
+		{
+			hash_map4_t::iterator i = m_last_purge++;
+			if (i->second.last_announce < now - interval - interval / 2)
+				erase_peer(i);
+		}
+	}
 }
 

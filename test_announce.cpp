@@ -208,7 +208,7 @@ int main(int argc, char* argv[])
 		return EXIT_FAILURE;
 	}
 
-	int num_threads = 16;
+	int num_threads = 400;
 
 	memset(&to, 0, sizeof(to));
 	to.sin_len = sizeof(to);
