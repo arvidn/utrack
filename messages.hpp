@@ -32,6 +32,7 @@ enum
 	max_scrape_responses = 71
 };
 
+#pragma pack (push)
 struct udp_announce_message
 {
 	uint64_t connection_id;
@@ -87,6 +88,7 @@ struct udp_scrape_response
 	uint32_t transaction_id;
 	udp_scrape_data data[71];
 };
+#pragma pack(pop)
 
 enum action_t
 {
