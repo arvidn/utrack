@@ -60,6 +60,12 @@ bool allow_alternate_ip = false;
 
 int interval = 1800;
 
+int listen_port = 8080;
+
+int num_threads = 1;
+
+int socket_buffer_size = 3 * 1024 * 1024;
+
 // set to true when we're shutting down
 volatile bool quit = false;
 
@@ -359,9 +365,6 @@ int main(int argc, char* argv[])
 	SHA1_Init(&secret);
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
-	int listen_port = 8080;
-	int num_threads = 1;
-
 	int r = pthread_rwlock_init(&swarm_mutex, 0);
 	if (r != 0)
 	{
@@ -377,7 +380,7 @@ int main(int argc, char* argv[])
 		return EXIT_FAILURE;
 	}
 
-	int opt = 3 * 1024 * 1024;
+	int opt = socket_buffer_size;
 	r = setsockopt(udp_socket, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt));
 	if (r == -1)
 	{
@@ -403,6 +406,7 @@ int main(int argc, char* argv[])
 			, listen_port, errno, strerror(errno));
 		return EXIT_FAILURE;
 	}
+	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	
 	pthread_t* threads = (pthread_t*)malloc(sizeof(pthread_t) * num_threads);
 	if (threads == NULL)
@@ -432,6 +436,13 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
 		quit = true;
 	}
+	r = sigaction(SIGTERM, &sa, 0);
+	if (r == -1)
+	{
+		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
+		quit = true;
+	}
+	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 
 	while (!quit)
 	{
