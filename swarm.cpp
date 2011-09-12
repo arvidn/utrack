@@ -1,5 +1,6 @@
 #include "swarm.hpp"
 #include <assert.h>
+#include <stdio.h>
 
 swarm::swarm()
 	: m_seeds(0)
