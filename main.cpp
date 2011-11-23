@@ -81,7 +81,7 @@ pthread_rwlock_t swarm_mutex;
 
 // the swarm hash table. The read lock must be held
 // when making lookups, the write lock must be held when
-// adding or remiving swarms
+// adding or removing swarms
 typedef hash_map<sha1_hash, swarm*, sha1_hash_fun> swarm_map_t;
 swarm_map_t swarms;
 
