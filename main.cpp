@@ -234,7 +234,22 @@ void* tracker_thread(void* arg)
 					s = new swarm;
 
 					pthread_rwlock_wrlock(&swarm_mutex);
-					swarms.insert(std::make_pair(hdr->hash, s));
+					// however, now that we've acquired the write lock,
+					// another thread may have already added it, make sure
+					// we still need to add it
+					i = swarms.find(hdr->hash);
+					if (i == swarms.end())
+					{
+						swarms.insert(std::make_pair(hdr->hash, s));
+					}
+					else
+					{
+						// it's OK to destruct it
+						// while holding the lock.
+						// this is the rare case
+						delete s;
+						s = i->second;
+					}
 					pthread_rwlock_unlock(&swarm_mutex);
 				}
 
