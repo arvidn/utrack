@@ -281,7 +281,7 @@ void* tracker_thread(void* arg)
 
 				iov[1].iov_base = buf;
 				iov[1].iov_len = len;
-				fprintf(stderr, "sending %d bytes payload\n", len);
+//				fprintf(stderr, "sending %d bytes payload\n", len);
 
 				// silly loop just to deal with the potential EINTR
 				do
