@@ -1,7 +1,7 @@
 uTrack
 ======
 
-uTrack is a very leight weight, fast, multithreaded UDP bittorrent tracker for unixes.
+uTrack is a very light weight, fast, multithreaded UDP bittorrent tracker for unixes.
 
 features
 --------
