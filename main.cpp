@@ -33,24 +33,10 @@ Copyright (C) 2010  Arvid Norberg
 #include "hash.hpp"
 #include "swarm.hpp"
 #include "messages.hpp"
+#include "endian.hpp"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
-#endif
-
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-uint64_t ntohll(uint64_t x)
-{
-	uint64_t ret;
-	uint8_t* d = ((uint8_t*)&ret) + 7;
-	uint8_t* s = (uint8_t*)&x;
-	
-	for (int i = 0; i < sizeof(x); ++i, --d, ++s)
-		*d = *s;
-	return ret;
-}
-#else
-#define ntohll(x) x
 #endif
 
 // if this is true, we allow peers to set which IP
@@ -62,9 +48,9 @@ int interval = 1800;
 
 int listen_port = 8080;
 
-int num_threads = 1;
+int num_threads = 4;
 
-int socket_buffer_size = 3 * 1024 * 1024;
+int socket_buffer_size = 5 * 1024 * 1024;
 
 // set to true when we're shutting down
 volatile bool quit = false;
@@ -179,7 +165,7 @@ void* tracker_thread(void* arg)
 		{
 			case action_connect:
 			{
-				if (ntohll(hdr->connection_id) != 0x41727101980LL)
+				if (be64toh(hdr->connection_id) != 0x41727101980LL)
 				{
 					__sync_fetch_and_add(&errors, 1);
 					printf("invalid connection ID for connect message\n");
@@ -266,7 +252,7 @@ void* tracker_thread(void* arg)
 
 				iov[1].iov_base = buf;
 				iov[1].iov_len = len;
-				fprintf(stderr, "sending %d bytes payload\n", len);
+//				fprintf(stderr, "sending %d bytes payload\n", len);
 
 				// silly loop just to deal with the potential EINTR
 				do
@@ -446,7 +432,7 @@ int main(int argc, char* argv[])
 
 	while (!quit)
 	{
-		usleep(60000000);
+		usleep(1000000);
 		uint32_t last_connects = connects;
 		uint32_t last_announces = announces;
 		uint32_t last_scrapes = scrapes;

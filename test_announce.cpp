@@ -32,9 +32,7 @@ Copyright (C) 2010  Arvid Norberg
 #include <stdlib.h>
 
 #include "messages.hpp"
-
-// TODO: TEMP
-#define htonll(x) (x)
+#include "endian.hpp"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -75,7 +73,7 @@ int announce_one_peer(int s, uint32_t ip, sha1_hash const& ih, int event, int ac
 
 	udp_announce_message req;
 	req.action = htonl(action_connect);
-	req.connection_id = htonll(0x41727101980LL);
+	req.connection_id = be64toh(0x41727101980LL);
 	req.transaction_id = (rand() << 16) ^ rand();
 
 	if (send(s, (char*)&req, 16, (sockaddr*)&to, sizeof(to)))
