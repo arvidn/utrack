@@ -65,6 +65,10 @@ SHA_CTX secret;
 // read-write lock for the swarm hash table
 pthread_rwlock_t swarm_mutex;
 
+// the address and port we receive packets on, and also
+// for sending responses (although over a separate socket)
+sockaddr_in bind_addr;
+
 // the swarm hash table. The read lock must be held
 // when making lookups, the write lock must be held when
 // adding or remiving swarms
@@ -133,6 +137,46 @@ void* tracker_thread(void* arg)
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 
+	// this is the socket this thread will use to send responses on
+	// to mitigate congestion on the receive socket
+	int send_socket = socket(PF_INET, SOCK_DGRAM, 0);
+	if (send_socket < 0)
+	{
+		fprintf(stderr, "failed to open send socket (%d): %s\n"
+			, errno, strerror(errno));
+		return 0;
+	}
+
+	int one = 1;
+	if (setsockopt(send_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+
+#ifdef SO_REUSEPORT
+	if (setsockopt(send_socket, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+#endif
+
+	if (bind(send_socket, (sockaddr*)&bind_addr, sizeof(bind_addr)) < 0)
+	{
+		fprintf(stderr, "failed to bind send socket to port %d (%d): %s\n"
+			, ntohs(bind_addr.sin_port), errno, strerror(errno));
+		close(send_socket);
+		return 0;
+	}
+
+	int opt = socket_buffer_size;
+	if (setsockopt(send_socket, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0)
+	{
+		fprintf(stderr, "failed to set socket send buffer size (%d): %s\n"
+			, errno, strerror(errno));
+	}
+
 	sockaddr_in from;
 	// use uint64_t to make the buffer properly aligned
 	uint64_t buffer[1500/8];
@@ -177,7 +221,7 @@ void* tracker_thread(void* arg)
 				resp.connection_id = generate_connection_id(&from);
 				resp.transaction_id = hdr->transaction_id;
 				__sync_fetch_and_add(&connects, 1);
-				if (respond(udp_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
+				if (respond(send_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
 					return 0;
 				break;
 			}
@@ -257,7 +301,7 @@ void* tracker_thread(void* arg)
 				// silly loop just to deal with the potential EINTR
 				do
 				{
-					r = sendmsg(udp_socket, &msg, MSG_NOSIGNAL);
+					r = sendmsg(send_socket, &msg, MSG_NOSIGNAL);
 					if (r == -1)
 					{
 						if (errno == EINTR) continue;
@@ -315,7 +359,7 @@ void* tracker_thread(void* arg)
 				}
 				pthread_rwlock_unlock(&swarm_mutex);
 
-				if (respond(udp_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
+				if (respond(send_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
 					return 0;
 
 				break;
@@ -326,6 +370,9 @@ void* tracker_thread(void* arg)
 				break;
 		}
 	}
+
+	close(send_socket);
+
 	return 0;
 }
 
@@ -373,19 +420,27 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "failed to set socket receive buffer size (%d): %s\n"
 			, errno, strerror(errno));
 	}
-	r = setsockopt(udp_socket, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt));
-	if (r == -1)
+
+	int one = 1;
+	if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
 	{
-		fprintf(stderr, "failed to set socket send buffer size (%d): %s\n"
+		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
 			, errno, strerror(errno));
 	}
 
-	sockaddr_in addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = htons(listen_port);
-	r = bind(udp_socket, (sockaddr*)&addr, sizeof(addr));
+#ifdef SO_REUSEPORT
+	if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+#endif
+
+	memset(&bind_addr, 0, sizeof(bind_addr));
+	bind_addr.sin_family = AF_INET;
+	bind_addr.sin_addr.s_addr = INADDR_ANY;
+	bind_addr.sin_port = htons(listen_port);
+	r = bind(udp_socket, (sockaddr*)&bind_addr, sizeof(bind_addr));
 	if (r < 0)
 	{
 		fprintf(stderr, "failed to bind socket to port %d (%d): %s\n"
@@ -432,7 +487,7 @@ int main(int argc, char* argv[])
 
 	while (!quit)
 	{
-		usleep(1000000);
+		usleep(60000000);
 		uint32_t last_connects = connects;
 		uint32_t last_announces = announces;
 		uint32_t last_scrapes = scrapes;
