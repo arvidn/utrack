@@ -1,6 +1,6 @@
 /*
 utrack is a very small an efficient BitTorrent tracker
-Copyright (C) 2010  Arvid Norberg
+Copyright (C) 2010-2013  Arvid Norberg
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -16,6 +16,11 @@ Copyright (C) 2010  Arvid Norberg
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+// TODO: instead of using an rw-lock and a mutex on the swarm, split up the
+// info-hash space into as many segments as there are threads, post announces to
+// the correct thread and let each thread have its own hashtable with its own swarms,
+// exclusively accessed just by that thread.
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/errno.h>
@@ -30,7 +35,11 @@ Copyright (C) 2010  Arvid Norberg
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "hash.hpp"
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <unordered_map>
+
 #include "swarm.hpp"
 #include "messages.hpp"
 #include "endian.hpp"
@@ -59,7 +68,7 @@ volatile bool quit = false;
 int udp_socket = -1;
 
 // partial SHA-1 hash of the secret key, combined with
-// source IP and port if forms the connection-id
+// source IP and port it forms the connection-id
 SHA_CTX secret;
 
 // read-write lock for the swarm hash table
@@ -72,19 +81,19 @@ sockaddr_in bind_addr;
 // the swarm hash table. The read lock must be held
 // when making lookups, the write lock must be held when
 // adding or removing swarms
-typedef hash_map<sha1_hash, swarm*, sha1_hash_fun> swarm_map_t;
+typedef std::unordered_map<sha1_hash, swarm*, sha1_hash_fun> swarm_map_t;
 swarm_map_t swarms;
 
 // round-robin for timing out peers
 swarm_map_t::iterator next_to_purge;
 
 // stats counters
-uint32_t connects = 0;
-uint32_t announces = 0;
-uint32_t scrapes = 0;
-uint32_t errors = 0;
-uint32_t bytes_out = 0;
-uint32_t bytes_in = 0;
+std::atomic<uint32_t> connects = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> announces = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> scrapes = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> errors = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> bytes_out = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> bytes_in = ATOMIC_VAR_INIT(0);
 
 void gen_secret_digest(sockaddr_in const* from, char* digest)
 {
@@ -123,11 +132,11 @@ retry_send:
 		fprintf(stderr, "sendto failed (%d): %s\n", errno, strerror(errno));
 		return 1;
 	}
-	__sync_fetch_and_add(&bytes_out, ret);
+	bytes_out += ret;
 	return 0;
 }
 
-void* tracker_thread(void* arg)
+void* tracker_thread()
 {
 	sigset_t sig;
 	sigfillset(&sig);
@@ -192,7 +201,7 @@ void* tracker_thread(void* arg)
 			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
 			break;
 		}
-		__sync_fetch_and_add(&bytes_in, size);
+		bytes_in += size;
 
 //		printf("received message from: %x port: %d size: %d\n"
 //			, from.sin_addr.s_addr, ntohs(from.sin_port), size);
@@ -211,7 +220,7 @@ void* tracker_thread(void* arg)
 			{
 				if (be64toh(hdr->connection_id) != 0x41727101980LL)
 				{
-					__sync_fetch_and_add(&errors, 1);
+					++errors;
 					printf("invalid connection ID for connect message\n");
 					// log error
 					continue;
@@ -220,7 +229,7 @@ void* tracker_thread(void* arg)
 				resp.action = htonl(action_connect);
 				resp.connection_id = generate_connection_id(&from);
 				resp.transaction_id = hdr->transaction_id;
-				__sync_fetch_and_add(&connects, 1);
+				++connects;
 				if (respond(send_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
 					return 0;
 				break;
@@ -230,7 +239,7 @@ void* tracker_thread(void* arg)
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
 					printf("invalid connection ID\n");
-					__sync_fetch_and_add(&errors, 1);
+					++errors;
 					// log error
 					continue;
 				}
@@ -240,11 +249,11 @@ void* tracker_thread(void* arg)
 				if (size < 98)
 				{
 					printf("announce packet too short. Expected 100, got %d\n", size);
-					__sync_fetch_and_add(&errors, 1);
+					++errors;
 					// log incorrect packet
 					continue;
 				}
-				__sync_fetch_and_add(&announces, 1);
+				++announces;
 
 				if (!allow_alternate_ip || hdr->ip == 0)
 					hdr->ip = from.sin_addr.s_addr;
@@ -323,7 +332,7 @@ void* tracker_thread(void* arg)
 						fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
 						return 0;
 					}
-					__sync_fetch_and_add(&bytes_out, r);
+					bytes_out += r;
 				} while (false);
 				break;
 			}
@@ -332,19 +341,19 @@ void* tracker_thread(void* arg)
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
 					printf("invalid connection ID for connect message\n");
-					__sync_fetch_and_add(&errors, 1);
+					++errors;
 					// log error
 					continue;
 				}
 				if (size < 16 + 20)
 				{
 					printf("scrape packet too short. Expected 36, got %d\n", size);
-					__sync_fetch_and_add(&errors, 1);
+					++errors;
 					// log error
 					continue;
 				}
 
-				__sync_fetch_and_add(&scrapes, 1);
+				++scrapes;
 
 				// if someone sent a very large scrape request, only
 				// respond to the first ones. We don't want to lock
@@ -381,7 +390,7 @@ void* tracker_thread(void* arg)
 			}
 			default:
 				printf("unknown action %d\n", ntohl(hdr->action));
-				__sync_fetch_and_add(&errors, 1);
+				++errors;
 				break;
 		}
 	}
@@ -464,23 +473,13 @@ int main(int argc, char* argv[])
 	}
 	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	
-	pthread_t* threads = (pthread_t*)malloc(sizeof(pthread_t) * num_threads);
-	if (threads == NULL)
-	{
-		fprintf(stderr, "failed allocate thread list (no memory)\n");
-		return EXIT_FAILURE;
-	}
+	std::vector<std::thread> threads;
 
 	// create threads
 	for (int i = 0; i < num_threads; ++i)
 	{
 		printf("starting thread %d\n", i);
-		r = pthread_create(&threads[i], NULL, &tracker_thread, 0);
-		if (r != 0)
-		{
-			fprintf(stderr, "failed to create thread (%d): %s\n", r, strerror(r));
-			return EXIT_FAILURE;
-		}
+		threads.push_back(std::thread(&tracker_thread));
 	}
 
 	struct sigaction sa;
@@ -502,19 +501,13 @@ int main(int argc, char* argv[])
 
 	while (!quit)
 	{
-		usleep(60000000);
-		uint32_t last_connects = connects;
-		uint32_t last_announces = announces;
-		uint32_t last_scrapes = scrapes;
-		uint32_t last_errors = errors;
-		uint32_t last_bytes_in = bytes_in;
-		uint32_t last_bytes_out = bytes_out;
-		__sync_fetch_and_sub(&connects, last_connects);
-		__sync_fetch_and_sub(&announces, last_announces);
-		__sync_fetch_and_sub(&scrapes, last_scrapes);
-		__sync_fetch_and_sub(&errors, last_errors);
-		__sync_fetch_and_sub(&bytes_in, last_bytes_in);
-		__sync_fetch_and_sub(&bytes_out, last_bytes_out);
+		std::this_thread::sleep_for(std::chrono::seconds(60));
+		uint32_t last_connects = connects.exchange(0);
+		uint32_t last_announces = announces.exchange(0);
+		uint32_t last_scrapes = scrapes.exchange(0);
+		uint32_t last_errors = errors.exchange(0);
+		uint32_t last_bytes_in = bytes_in.exchange(0);
+		uint32_t last_bytes_out = bytes_out.exchange(0);
 		printf("c: %u a: %u s: %u e: %u in: %u kB out: %u kB\n"
 			, last_connects, last_announces, last_scrapes, last_errors
 			, last_bytes_in / 1000, last_bytes_out / 1000);
@@ -544,12 +537,9 @@ int main(int argc, char* argv[])
 
 	for (int i = 0; i < num_threads; ++i)
 	{
-		void* retval = 0;
-		pthread_join(threads[i], &retval);
+		threads[i].join();
 		printf("thread %d terminated\n", i);
 	}
-
-	free(threads);
 
 	pthread_rwlock_destroy(&swarm_mutex);
 

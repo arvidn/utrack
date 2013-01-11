@@ -16,8 +16,8 @@ requirements
 
 utracker requires:
 
-* GCC 4.2 or newer. Specifically the atomic intrinsic operations ``__sync_fetch_and_sub`` et.al. as well as the ``<ext/hash_map>`` extension header.
-* pthreads
+* a C++11 conformant compiler (clang 3.1+ or GCC 4.7 or so)
+* pthreads (for read-write lock)
 * openssl (libcrypto)
 * BSD sockets
 

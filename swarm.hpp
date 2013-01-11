@@ -3,9 +3,11 @@
 
 #include <netinet/in.h>
 #include <time.h>
+#include <vector>
+#include <thread>
+#include <unordered_map>
 
 #include "messages.hpp"
-#include "hash.hpp"
 
 
 struct peer_ip4
@@ -50,7 +52,6 @@ struct swarm
 	friend struct swarm_lock;
 
 	swarm();
-	~swarm();
 	void announce(udp_announce_message* hdr, char** buf, int* len
 		, uint32_t* downloaders, uint32_t* seeds);
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
@@ -59,7 +60,7 @@ struct swarm
 
 private:
 
-	typedef hash_map<uint32_t, peer_entry> hash_map4_t;
+	typedef std::unordered_map<uint32_t, peer_entry> hash_map4_t;
 
 	void lock();
 	void unlock();
@@ -88,7 +89,7 @@ private:
 	// swarm mutex, since it may be accessed
 	// by multiple threads, it needs to be locked
 	// while accessing it or its peer array
-	pthread_mutex_t m_mutex;
+	std::mutex m_mutex;
 };
 
 struct swarm_lock

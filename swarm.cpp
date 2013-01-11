@@ -8,28 +8,17 @@ swarm::swarm()
 	, m_download_count(0)
 	, m_last_announce(0)
 {
-	int r = pthread_mutex_init(&m_mutex, 0);
-	if (r != 0)
-	{
-		fprintf(stderr, "swarm failed to create mutex (%d): %s\n", r, strerror(r));
-	}
-
 	m_last_purge = m_peers4.end();
-}
-
-swarm::~swarm()
-{
-	pthread_mutex_destroy(&m_mutex);
 }
 
 void swarm::lock()
 {
-	pthread_mutex_lock(&m_mutex);
+	m_mutex.lock();
 }
 
 void swarm::unlock()
 {
-	pthread_mutex_unlock(&m_mutex);
+	m_mutex.unlock();
 }
 
 void swarm::scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders)
