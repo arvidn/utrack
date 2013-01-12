@@ -159,6 +159,7 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 
 		if (size < 16)
 		{
+			printf("packet too short (%d)\n", size);
 			// log incorrect packet
 			continue;
 		}
@@ -210,14 +211,17 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 
 				// post the announce to the thread that's responsible
 				// for this info-hash
+				announce_msg m;
+				m.bits.announce = *hdr;
+				m.from = from;
+				m.fromlen = fromlen;
 				int thread_selector = hdr->hash.val[0] % announce_threads.size();
-				announce_threads[thread_selector]->post_announce(announce_msg { *hdr, from, fromlen});
+				announce_threads[thread_selector]->post_announce(m);
 
 				break;
 			}
 			case action_scrape:
 			{
-/*
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
 					printf("invalid connection ID for connect message\n");
@@ -233,40 +237,21 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 					continue;
 				}
 
-				++scrapes;
-
-				// if someone sent a very large scrape request, only
-				// respond to the first ones. We don't want to lock
-				// too many swarms for just one response
-				int num_hashes = (std::min)((size - 16) / 20, int(max_scrape_responses));
-
 				udp_scrape_message* req = (udp_scrape_message*)buffer;
 
-				udp_scrape_response resp;
-				resp.action = htonl(action_scrape);
-				resp.transaction_id = hdr->transaction_id;
+				// for now, just support scrapes for a single hash at a time
+				// to avoid having to bounce the request around all the threads
+				// befor accruing all the stats
 
-				pthread_rwlock_rdlock(&swarm_mutex);
-				for (int i = 0; i < num_hashes; ++i)
-				{
-					swarm_map_t::iterator j = swarms.find(req->hash[i]);
-					if (j != swarms.end())
-					{
-						swarm* s = j->second;
-						swarm_lock l(*s);
-						s->scrape(&resp.data[i].seeds, &resp.data[i].download_count
-							, &resp.data[i].downloaders);
-						resp.data[i].seeds = htonl(resp.data[i].seeds);
-						resp.data[i].download_count = htonl(resp.data[i].download_count);
-						resp.data[i].downloaders = htonl(resp.data[i].downloaders);
-					}
-				}
-				pthread_rwlock_unlock(&swarm_mutex);
+				// post the announce to the thread that's responsible
+				// for this info-hash
+				announce_msg m;
+				m.bits.scrape = *req;
+				m.from = from;
+				m.fromlen = fromlen;
+				int thread_selector = req->hash[0].val[0] % announce_threads.size();
+				announce_threads[thread_selector]->post_announce(m);
 
-				if (respond(m_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
-					return;
-
-*/
 				break;
 			}
 			default:
@@ -275,8 +260,6 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 				break;
 		}
 	}
-
-	return;
 }
 
 void sigint(int s)

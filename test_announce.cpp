@@ -130,10 +130,10 @@ int announce_one_peer(int s, uint32_t ip, sha1_hash const& ih, int event, int ac
 	if (action == action_scrape)
 	{
 		udp_scrape_response* scr = (udp_scrape_response*)buffer;
-		printf("scrape response h: %x d: %u s: %u c: %u\n", ih.val[0]
-			, ntohl(scr->data[0].downloaders)
-			, ntohl(scr->data[0].seeds)
-			, ntohl(scr->data[0].download_count));
+//		printf("scrape response h: %x d: %u s: %u c: %u\n", ih.val[0]
+//			, ntohl(scr->data[0].downloaders)
+//			, ntohl(scr->data[0].seeds)
+//			, ntohl(scr->data[0].download_count));
 	}
 	return 0;
 }
@@ -180,7 +180,7 @@ void* announce_thread(void* arg)
 
 	for (int e = 0; e < 3; ++e)
 	{
-		printf("event: %d\n", e);
+//		printf("event: %d\n", e);
 		for (int ih = 0; ih < sizeof(info_hashes)/sizeof(info_hashes[0]); ++ih)
 		{
 			for (int peer = 0; peer < sizeof(peer_ips)/sizeof(peer_ips[0]); ++peer)

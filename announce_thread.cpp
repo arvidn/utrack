@@ -32,6 +32,9 @@ extern int socket_buffer_size;
 extern std::atomic<uint32_t> bytes_out;
 extern std::atomic<uint32_t> announces;
 extern std::atomic<uint32_t> dropped;
+extern std::atomic<uint32_t> scrapes;
+
+bool respond(int socket, char const* buf, int len, sockaddr const* to, socklen_t tolen);
 
 void announce_thread::thread_fun()
 {
@@ -123,53 +126,83 @@ void announce_thread::thread_fun()
 
 		for (announce_msg const& m : q)
 		{
-			// find the swarm being announce to
-			// or create it if it doesn't exist
-			swarm& s = m_swarms[m.m.hash];
-
-			// prepare the buffer to write the response to
-			char* buf;
-			int len;
-			msghdr msg;
-			udp_announce_response resp;
-
-			resp.action = htonl(action_announce);
-			resp.transaction_id = m.m.transaction_id;
-			resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
-
-			// do the actual announce with the swarm
-			// and get a pointer to the peers back
-			s.announce(&m.m, &buf, &len, &resp.downloaders, &resp.seeds);
-			++announces;
-
-			// now turn these counters into network byte order
-			resp.downloaders = htonl(resp.downloaders);
-			resp.seeds = htonl(resp.seeds);
-
-			// set up the iovec array for the response. The header + the
-			// body with the peer list
-			iovec iov[2] = { { &resp, 20}, { buf, len } };
-
-			msg.msg_name = (void*)&m.from;
-			msg.msg_namelen = m.fromlen;
-			msg.msg_iov = iov;
-			msg.msg_iovlen = 2;
-			msg.msg_control = 0;
-			msg.msg_controllen = 0;
-			msg.msg_flags = 0;
-
-			// silly loop just to deal with the potential EINTR
-			do
+			switch (ntohl(m.bits.announce.action))
 			{
-				r = sendmsg(sock, &msg, MSG_NOSIGNAL);
-				if (r == -1)
+				case action_announce:
 				{
-					if (errno == EINTR) continue;
-					fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
-					return;
+					// find the swarm being announce to
+					// or create it if it doesn't exist
+					swarm& s = m_swarms[m.bits.announce.hash];
+
+					// prepare the buffer to write the response to
+					char* buf;
+					int len;
+					msghdr msg;
+					udp_announce_response resp;
+
+					resp.action = htonl(action_announce);
+					resp.transaction_id = m.bits.announce.transaction_id;
+					resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
+
+					// do the actual announce with the swarm
+					// and get a pointer to the peers back
+					s.announce(&m.bits.announce, &buf, &len, &resp.downloaders, &resp.seeds);
+					++announces;
+
+					// now turn these counters into network byte order
+					resp.downloaders = htonl(resp.downloaders);
+					resp.seeds = htonl(resp.seeds);
+
+					// set up the iovec array for the response. The header + the
+					// body with the peer list
+					iovec iov[2] = { { &resp, 20}, { buf, len } };
+
+					msg.msg_name = (void*)&m.from;
+					msg.msg_namelen = m.fromlen;
+					msg.msg_iov = iov;
+					msg.msg_iovlen = 2;
+					msg.msg_control = 0;
+					msg.msg_controllen = 0;
+					msg.msg_flags = 0;
+
+					// silly loop just to deal with the potential EINTR
+					do
+					{
+						r = sendmsg(sock, &msg, MSG_NOSIGNAL);
+						if (r == -1)
+						{
+							if (errno == EINTR) continue;
+							fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
+							return;
+						}
+						bytes_out += r;
+					} while (false);
+					break;
 				}
-				bytes_out += r;
-			} while (false);
+			case action_scrape:
+				{
+					udp_scrape_response resp;
+					resp.action = htonl(action_scrape);
+					resp.transaction_id = m.bits.scrape.transaction_id;
+
+					++scrapes;
+
+					swarm_map_t::iterator j = m_swarms.find(m.bits.scrape.hash[0]);
+					if (j != m_swarms.end())
+					{
+						j->second.scrape(&resp.data[0].seeds, &resp.data[0].download_count
+							, &resp.data[0].downloaders);
+						resp.data[0].seeds = htonl(resp.data[0].seeds);
+						resp.data[0].download_count = htonl(resp.data[0].download_count);
+						resp.data[0].downloaders = htonl(resp.data[0].downloaders);
+					}
+
+					if (respond(sock, (char*)&resp, 8 + 12, (sockaddr*)&m.from, m.fromlen))
+						return;
+
+					break;
+				}
+			}
 		}
 	}
 

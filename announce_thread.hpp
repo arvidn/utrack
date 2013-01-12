@@ -31,7 +31,11 @@ Copyright (C) 2010-2013  Arvid Norberg
 
 struct announce_msg
 {
-	udp_announce_message m;
+	union
+	{
+		udp_announce_message announce;
+		udp_scrape_message scrape;
+	} bits;
 	sockaddr_in from;
 	socklen_t fromlen;
 };
