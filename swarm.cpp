@@ -7,7 +7,7 @@ swarm::swarm()
 	: m_seeds(0)
 	, m_downloaders(0)
 	, m_download_count(0)
-	, m_last_announce(0)
+	, m_last_announce(steady_clock::time_point::min())
 {
 	m_last_purge = m_peers4.end();
 }
@@ -19,13 +19,13 @@ void swarm::scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* download
 	*downloaders = m_downloaders;
 }
 
-void swarm::announce(udp_announce_message const* hdr, char** buf, int* len
+void swarm::announce(steady_clock::time_point now, udp_announce_message const* hdr
+	, char** buf, int* len
 	, uint32_t* downloaders, uint32_t* seeds)
 {
 	*seeds = m_seeds;
 	*downloaders = m_downloaders;
 
-	time_t now = time(0);
 	m_last_announce = now;
 
 	// the interval setting
@@ -38,7 +38,7 @@ void swarm::announce(udp_announce_message const* hdr, char** buf, int* len
 	if (m_last_purge != m_peers4.end())
 	{
 		hash_map4_t::iterator i = m_last_purge++;
-		if (i->second.last_announce < now - interval - interval / 2)
+		if (i->second.last_announce < now - seconds(interval + interval / 2))
 			erase_peer(i);
 	}
 
@@ -183,7 +183,7 @@ void swarm::erase_peer(swarm::hash_map4_t::iterator i)
 	m_peers4.erase(i);
 }
 
-void swarm::purge_stale(time_t now)
+void swarm::purge_stale(steady_clock::time_point now)
 {
 	// the interval setting
 	extern int interval;
@@ -199,7 +199,7 @@ void swarm::purge_stale(time_t now)
 		if (m_last_purge != m_peers4.end())
 		{
 			hash_map4_t::iterator i = m_last_purge++;
-			if (i->second.last_announce < now - interval - interval / 2)
+			if (i->second.last_announce < now - seconds(interval + interval / 2))
 				erase_peer(i);
 		}
 	}

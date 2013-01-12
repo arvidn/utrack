@@ -6,9 +6,12 @@
 #include <vector>
 #include <thread>
 #include <unordered_map>
+#include <chrono>
+
+using std::chrono::steady_clock;
+using std::chrono::seconds;
 
 #include "messages.hpp"
-
 
 struct peer_ip4
 {
@@ -32,7 +35,7 @@ struct peer_ip4
 
 struct peer_entry
 {
-	peer_entry(): index(0), complete(false), downloading(true), key(0), last_announce(0) {}
+	peer_entry(): index(0), complete(false), downloading(true), key(0), last_announce(steady_clock::time_point::min()) {}
 	// index into the compact array of IPs
 	uint32_t index:30;
 	// true if we've received complete from this peer
@@ -44,17 +47,18 @@ struct peer_entry
 	// on the same IP
 	uint32_t key;
 	// last time this peer announced
-	time_t last_announce;
+	steady_clock::time_point last_announce;
 };
 
 struct swarm
 {
 	swarm();
-	void announce(udp_announce_message const* hdr, char** buf, int* len
+	void announce(steady_clock::time_point now, udp_announce_message const* hdr
+		, char** buf, int* len
 		, uint32_t* downloaders, uint32_t* seeds);
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
 
-	void purge_stale(time_t now);
+	void purge_stale(steady_clock::time_point now);
 
 private:
 
@@ -68,7 +72,7 @@ private:
 
 	// the last time anyone announced to this swarm
 	// this is used to expire swarms
-	time_t m_last_announce;
+	steady_clock::time_point m_last_announce;
 
 	// hash table of all peers keyed on their IP
 	hash_map4_t m_peers4;

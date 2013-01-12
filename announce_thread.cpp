@@ -18,6 +18,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 
 #include "announce_thread.hpp"
 #include <atomic>
+#include <chrono>
 
 #include <signal.h>
 #include <unistd.h>
@@ -26,6 +27,9 @@ Copyright (C) 2010-2013  Arvid Norberg
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
+
+using std::chrono::steady_clock;
+using std::chrono::seconds;
 
 extern sockaddr_in bind_addr;
 extern int socket_buffer_size;
@@ -86,25 +90,30 @@ void announce_thread::thread_fun()
 			, errno, strerror(errno));
 	}
 
-	time_t next_prune = time(NULL) + 10;
+	steady_clock::time_point now = steady_clock::now();
+	steady_clock::time_point next_prune = now + seconds(10);
 
 	// round-robin for timing out peers
 	swarm_map_t::iterator next_to_purge = m_swarms.begin();
 	for (;;)
 	{
 		std::unique_lock<std::mutex> l(m_mutex);
-		while (m_queue.empty() && !m_quit && time(NULL) < next_prune) m_cond.wait(l);
+		while (m_queue.empty()
+			&& !m_quit
+			&& (now = steady_clock::now()) < next_prune)
+			m_cond.wait(l);
+
 		if (m_quit) break;
 		std::deque<announce_msg> q;
 		m_queue.swap(q);
 		l.unlock();
 
+		now = steady_clock::now();
 		// if it's been long enough, just do some relgular
 		// maintanence on the swarms
-		time_t now = time(NULL);
 		if (now > next_prune)
 		{
-			next_prune = now + 10;
+			next_prune = now + seconds(10);
 
 			if (next_to_purge == m_swarms.end() && m_swarms.size() > 0)
 				next_to_purge = m_swarms.begin();
@@ -146,7 +155,7 @@ void announce_thread::thread_fun()
 
 					// do the actual announce with the swarm
 					// and get a pointer to the peers back
-					s.announce(&m.bits.announce, &buf, &len, &resp.downloaders, &resp.seeds);
+					s.announce(now, &m.bits.announce, &buf, &len, &resp.downloaders, &resp.seeds);
 					++announces;
 
 					// now turn these counters into network byte order
