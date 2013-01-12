@@ -1,5 +1,6 @@
 #include "swarm.hpp"
 #include <assert.h>
+#include <iterator>
 #include <stdio.h>
 
 swarm::swarm()
@@ -54,6 +55,17 @@ void swarm::announce(udp_announce_message const* hdr, char** buf, int* len
 			return;
 		}
 		// insert this peer
+
+		// a swarm doesn't need more than 300000 peers in the tracker's
+		// peerlist to stay well connected and healthy
+		if (m_peers4.size() >= 300000)
+		{
+			// remove one random peer
+			hash_map4_t::iterator del = m_peers4.begin();
+			std::advance(del, rand() % m_peers4.size());
+			erase_peer(del);
+		}
+
 		peer_entry e;
 		e.last_announce = now;
 		e.index = m_ips4.size();
@@ -81,9 +93,18 @@ void swarm::announce(udp_announce_message const* hdr, char** buf, int* len
 	}
 	else
 	{
+		if (ntohl(hdr->event) == event_stopped)
+		{
+			// remove the peer from the list and don't
+			// return any peers
+			erase_peer(i);
+			*buf = 0;
+			*len = 0;
+			return;
+		}
+
 		peer_entry& e = i->second;
 		e.last_announce = now;
-		// TODO: should we prevent peers to change key like this?
 		e.key = hdr->key;
 
 		// this peer just completed (and hasn't sent complete before)
@@ -110,16 +131,6 @@ void swarm::announce(udp_announce_message const* hdr, char** buf, int* len
 
 		// the port might have changed
 		m_ips4[e.index] = peer_ip4(hdr->ip, hdr->port);
-	}
-
-	if (ntohl(hdr->event) == event_stopped)
-	{
-		// remove the peer from the list and don't
-		// return any peers
-		erase_peer(i);
-		*buf = 0;
-		*len = 0;
-		return;
 	}
 
 	size_t num_want = (std::min)((std::min)(size_t(200)

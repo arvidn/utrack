@@ -84,6 +84,9 @@ std::atomic<uint32_t> errors = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> bytes_out = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> bytes_in = ATOMIC_VAR_INIT(0);
 
+// the number of dropped announce requests, because we couldn't keep up
+std::atomic<uint32_t> dropped = ATOMIC_VAR_INIT(0);
+
 void gen_secret_digest(sockaddr_in const* from, char* digest)
 {
 	SHA_CTX ctx = secret;
@@ -288,9 +291,19 @@ struct announce_thread
 	void post_announce(announce_msg const& m)
 	{
 		std::unique_lock<std::mutex> l(m_mutex);
-		m_queue.push_back(m);
-		l.unlock();
 
+		// have some upper limit here, to avoid
+		// allocating memory indefinitely
+		if (m_queue.size() >= 5000)
+		{
+			++dropped;
+			return;
+		}
+
+		m_queue.push_back(m);
+
+		// don't send a signal if we don't need to
+		// it's expensive
 		if (m_queue.size() == 1)
 			m_cond.notify_one();
 	}
@@ -413,9 +426,9 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 
 				break;
 			}
-/*
 			case action_scrape:
 			{
+/*
 				if (!verify_connection_id(hdr->connection_id, &from))
 				{
 					printf("invalid connection ID for connect message\n");
@@ -464,9 +477,9 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 				if (respond(m_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
 					return;
 
+*/
 				break;
 			}
-*/
 			default:
 				printf("unknown action %d\n", ntohl(hdr->action));
 				++errors;
@@ -587,9 +600,10 @@ int main(int argc, char* argv[])
 		uint32_t last_errors = errors.exchange(0);
 		uint32_t last_bytes_in = bytes_in.exchange(0);
 		uint32_t last_bytes_out = bytes_out.exchange(0);
-		printf("c: %u a: %u s: %u e: %u in: %u kB out: %u kB\n"
+		uint32_t last_dropped = dropped.exchange(0);
+		printf("c: %u a: %u s: %u e: %u d: %u in: %u kB out: %u kB\n"
 			, last_connects, last_announces, last_scrapes, last_errors
-			, last_bytes_in / 1000, last_bytes_out / 1000);
+			, last_dropped, last_bytes_in / 1000, last_bytes_out / 1000);
 	}
 
 	close(udp_socket);
