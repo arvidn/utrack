@@ -109,11 +109,11 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in* from)
 }
 
 // send a packet and retry on EINTR
-bool respond(int socket, char const* buf, int len, sockaddr const* to, socklen_t tolen)
+bool respond(int sock, char const* buf, int len, sockaddr const* to, socklen_t tolen)
 {
 	ssize_t ret = 0;
 retry_send:
-	ret = sendto(socket, buf, len, MSG_NOSIGNAL, to, tolen);
+	ret = sendto(sock, buf, len, MSG_NOSIGNAL, to, tolen);
 	if (ret == -1)
 	{
 		if (errno == EINTR) goto retry_send;
@@ -351,15 +351,15 @@ int main(int argc, char* argv[])
 
 	// create threads. We should create the same number of
 	// announce threads as we have cores on the machine
+	printf("starting %d announce threads\n", num_cores);
 	for (int i = 0; i < num_cores; ++i)
 	{
-		printf("starting announce thread %d\n", i);
 		announce_threads.push_back(new announce_thread());
 	}
 
-	for (int i = 0; i < num_threads; ++i)
+	printf("starting %d receive threads\n", num_cores);
+	for (int i = 0; i < num_cores; ++i)
 	{
-		printf("starting receive thread %d\n", i);
 		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads)));
 	}
 
