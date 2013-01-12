@@ -11,16 +11,6 @@ swarm::swarm()
 	m_last_purge = m_peers4.end();
 }
 
-void swarm::lock()
-{
-	m_mutex.lock();
-}
-
-void swarm::unlock()
-{
-	m_mutex.unlock();
-}
-
 void swarm::scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders)
 {
 	*seeds = m_seeds;
@@ -28,7 +18,7 @@ void swarm::scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* download
 	*downloaders = m_downloaders;
 }
 
-void swarm::announce(udp_announce_message* hdr, char** buf, int* len
+void swarm::announce(udp_announce_message const* hdr, char** buf, int* len
 	, uint32_t* downloaders, uint32_t* seeds)
 {
 	*seeds = m_seeds;

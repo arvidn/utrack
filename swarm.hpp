@@ -32,27 +32,25 @@ struct peer_ip4
 
 struct peer_entry
 {
-	peer_entry(): index(0), key(0), last_announce(0), complete(false), downloading(true) {}
+	peer_entry(): index(0), complete(false), downloading(true), key(0), last_announce(0) {}
 	// index into the compact array of IPs
-	int index;
+	uint32_t index:30;
+	// true if we've received complete from this peer
+	bool complete:1;
+	// true while this peer's left > 0
+	bool downloading:1;
 	// the key this peer uses in its announces
 	// this is used to distinguish between peers
 	// on the same IP
 	uint32_t key;
 	// last time this peer announced
 	time_t last_announce;
-	// true if we've received complete from this peer
-	bool complete:1;
-	// true while this peer's left > 0
-	bool downloading:1;
 };
 
 struct swarm
 {
-	friend struct swarm_lock;
-
 	swarm();
-	void announce(udp_announce_message* hdr, char** buf, int* len
+	void announce(udp_announce_message const* hdr, char** buf, int* len
 		, uint32_t* downloaders, uint32_t* seeds);
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
 
@@ -61,9 +59,6 @@ struct swarm
 private:
 
 	typedef std::unordered_map<uint32_t, peer_entry> hash_map4_t;
-
-	void lock();
-	void unlock();
 
 	void erase_peer(swarm::hash_map4_t::iterator i);
 
@@ -85,23 +80,6 @@ private:
 	// this may be m_peers4.end(). It's used to not
 	// necessarily go through all peers in one go
 	hash_map4_t::iterator m_last_purge;
-
-	// swarm mutex, since it may be accessed
-	// by multiple threads, it needs to be locked
-	// while accessing it or its peer array
-	std::mutex m_mutex;
-};
-
-struct swarm_lock
-{
-	swarm_lock(swarm& s): m_s(s) { m_s.lock(); }
-	~swarm_lock() { m_s.unlock(); }
-private:
-	// non default constructible and non copyable
-	swarm_lock();
-	swarm_lock(swarm_lock const&);
-
-	swarm& m_s;
 };
 
 #endif

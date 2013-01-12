@@ -39,6 +39,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <chrono>
 #include <atomic>
 #include <unordered_map>
+#include <deque>
 
 #include "swarm.hpp"
 #include "messages.hpp"
@@ -71,21 +72,9 @@ int udp_socket = -1;
 // source IP and port it forms the connection-id
 SHA_CTX secret;
 
-// read-write lock for the swarm hash table
-pthread_rwlock_t swarm_mutex;
-
 // the address and port we receive packets on, and also
 // for sending responses (although over a separate socket)
 sockaddr_in bind_addr;
-
-// the swarm hash table. The read lock must be held
-// when making lookups, the write lock must be held when
-// adding or removing swarms
-typedef std::unordered_map<sha1_hash, swarm*, sha1_hash_fun> swarm_map_t;
-swarm_map_t swarms;
-
-// round-robin for timing out peers
-swarm_map_t::iterator next_to_purge;
 
 // stats counters
 std::atomic<uint32_t> connects = ATOMIC_VAR_INIT(0);
@@ -136,7 +125,207 @@ retry_send:
 	return 0;
 }
 
-void* tracker_thread()
+struct announce_msg
+{
+	udp_announce_message m;
+	sockaddr_in from;
+	socklen_t fromlen;
+};
+
+// this is a thread that handles the announce for a specific
+// set of info-hashes, and then sends a response over its own
+// UDP socket
+struct announce_thread
+{
+	announce_thread() : m_quit(false), m_thread( [=]() { thread_fun(); } ) {}
+
+	announce_thread(announce_thread const&) = delete;
+	announce_thread& operator=(announce_thread const&) = delete;
+
+	void thread_fun()
+	{
+		sigset_t sig;
+		sigfillset(&sig);
+		int r = pthread_sigmask(SIG_BLOCK, &sig, NULL);
+		if (r == -1)
+		{
+			fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
+		}
+
+		// this is the socket this thread will use to send responses on
+		// to mitigate congestion on the receive socket
+		m_socket = socket(PF_INET, SOCK_DGRAM, 0);
+		if (m_socket < 0)
+		{
+			fprintf(stderr, "failed to open send socket (%d): %s\n"
+				, errno, strerror(errno));
+			return;
+		}
+
+		int one = 1;
+		if (setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+		{
+			fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
+				, errno, strerror(errno));
+		}
+
+#ifdef SO_REUSEPORT
+		if (setsockopt(m_socket, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
+		{
+			fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
+				, errno, strerror(errno));
+		}
+#endif
+
+		if (bind(m_socket, (sockaddr*)&bind_addr, sizeof(bind_addr)) < 0)
+		{
+			fprintf(stderr, "failed to bind send socket to port %d (%d): %s\n"
+				, ntohs(bind_addr.sin_port), errno, strerror(errno));
+			close(m_socket);
+			return;
+		}
+
+		int opt = socket_buffer_size;
+		if (setsockopt(m_socket, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0)
+		{
+			fprintf(stderr, "failed to set socket send buffer size (%d): %s\n"
+				, errno, strerror(errno));
+		}
+
+		time_t next_prune = time(NULL) + 10;
+
+		// round-robin for timing out peers
+		swarm_map_t::iterator next_to_purge = m_swarms.begin();
+		for (;;)
+		{
+			std::unique_lock<std::mutex> l(m_mutex);
+			while (m_queue.empty() && !m_quit && time(NULL) < next_prune) m_cond.wait(l);
+			if (m_quit) break;
+			std::deque<announce_msg> q;
+			m_queue.swap(q);
+			l.unlock();
+
+			// if it's been long enough, just do some relgular
+			// maintanence on the swarms
+			time_t now = time(NULL);
+			if (now > next_prune)
+			{
+				next_prune = now + 10;
+
+				if (next_to_purge == m_swarms.end() && m_swarms.size() > 0)
+					next_to_purge = m_swarms.begin();
+
+				if (m_swarms.size() > 0)
+				{
+					int num_to_purge = (std::min)(int(m_swarms.size()), 20);
+
+					for (int i = 0; i < num_to_purge; ++i)
+					{
+						swarm& s = next_to_purge->second;
+						s.purge_stale(now);
+
+						++next_to_purge;
+						if (next_to_purge == m_swarms.end()) next_to_purge = m_swarms.begin();
+					}
+				}
+			}
+
+			for (announce_msg const& m : q)
+			{
+				// find the swarm being announce to
+				// or create it if it doesn't exist
+				swarm& s = m_swarms[m.m.hash];
+
+				// prepare the buffer to write the response to
+				char* buf;
+				int len;
+				msghdr msg;
+				udp_announce_response resp;
+
+				resp.action = htonl(action_announce);
+				resp.transaction_id = m.m.transaction_id;
+				resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
+
+				// do the actual announce with the swarm
+				// and get a pointer to the peers back
+				s.announce(&m.m, &buf, &len, &resp.downloaders, &resp.seeds);
+				++announces;
+
+				// now turn these counters into network byte order
+				resp.downloaders = htonl(resp.downloaders);
+				resp.seeds = htonl(resp.seeds);
+
+				// set up the iovec array for the response. The header + the
+				// body with the peer list
+				iovec iov[2] = { { &resp, 20}, { buf, len } };
+
+				msg.msg_name = (void*)&m.from;
+				msg.msg_namelen = m.fromlen;
+				msg.msg_iov = iov;
+				msg.msg_iovlen = 2;
+				msg.msg_control = 0;
+				msg.msg_controllen = 0;
+				msg.msg_flags = 0;
+
+				// silly loop just to deal with the potential EINTR
+				do
+				{
+					r = sendmsg(m_socket, &msg, MSG_NOSIGNAL);
+					if (r == -1)
+					{
+						if (errno == EINTR) continue;
+						fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
+						return;
+					}
+					bytes_out += r;
+				} while (false);
+			}
+		}
+
+		close(m_socket);
+	}
+
+	void post_announce(announce_msg const& m)
+	{
+		std::unique_lock<std::mutex> l(m_mutex);
+		m_queue.push_back(m);
+		l.unlock();
+
+		if (m_queue.size() == 1)
+			m_cond.notify_one();
+	}
+
+	~announce_thread()
+	{
+		std::unique_lock<std::mutex> l(m_mutex);
+		m_quit = true;
+		l.unlock();
+		m_cond.notify_one();
+		m_thread.join();
+	}
+
+private:
+
+	std::mutex m_mutex;
+	std::condition_variable m_cond;
+	std::deque<announce_msg> m_queue;
+
+	// responses are sent on a per-thread socket
+	int m_socket;
+
+	// the swarm hash table. Each thread has its own hash table of swarms.
+	// swarms are pinned to certain threads based on their info-hash
+	typedef std::unordered_map<sha1_hash, swarm, sha1_hash_fun> swarm_map_t;
+	swarm_map_t m_swarms;
+
+	bool m_quit;
+	std::thread m_thread;
+};
+
+// this thread receives incoming announces, parses them and posts
+// the announce to the correct announce thread, that then takes over
+// and is responsible for responding
+void receive_thread(std::vector<announce_thread*>& announce_threads)
 {
 	sigset_t sig;
 	sigfillset(&sig);
@@ -144,46 +333,6 @@ void* tracker_thread()
 	if (r == -1)
 	{
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
-	}
-
-	// this is the socket this thread will use to send responses on
-	// to mitigate congestion on the receive socket
-	int send_socket = socket(PF_INET, SOCK_DGRAM, 0);
-	if (send_socket < 0)
-	{
-		fprintf(stderr, "failed to open send socket (%d): %s\n"
-			, errno, strerror(errno));
-		return 0;
-	}
-
-	int one = 1;
-	if (setsockopt(send_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
-			, errno, strerror(errno));
-	}
-
-#ifdef SO_REUSEPORT
-	if (setsockopt(send_socket, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
-			, errno, strerror(errno));
-	}
-#endif
-
-	if (bind(send_socket, (sockaddr*)&bind_addr, sizeof(bind_addr)) < 0)
-	{
-		fprintf(stderr, "failed to bind send socket to port %d (%d): %s\n"
-			, ntohs(bind_addr.sin_port), errno, strerror(errno));
-		close(send_socket);
-		return 0;
-	}
-
-	int opt = socket_buffer_size;
-	if (setsockopt(send_socket, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0)
-	{
-		fprintf(stderr, "failed to set socket send buffer size (%d): %s\n"
-			, errno, strerror(errno));
 	}
 
 	sockaddr_in from;
@@ -230,8 +379,8 @@ void* tracker_thread()
 				resp.connection_id = generate_connection_id(&from);
 				resp.transaction_id = hdr->transaction_id;
 				++connects;
-				if (respond(send_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
-					return 0;
+				if (respond(udp_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
+					return;
 				break;
 			}
 			case action_announce:
@@ -253,89 +402,18 @@ void* tracker_thread()
 					// log incorrect packet
 					continue;
 				}
-				++announces;
 
 				if (!allow_alternate_ip || hdr->ip == 0)
 					hdr->ip = from.sin_addr.s_addr;
 
-				pthread_rwlock_rdlock(&swarm_mutex);
-				swarm_map_t::iterator i = swarms.find(hdr->hash);
-				swarm* s = 0;
-				if (i != swarms.end())
-				{
-					s = i->second;
-				}
-				pthread_rwlock_unlock(&swarm_mutex);
+				// post the announce to the thread that's responsible
+				// for this info-hash
+				int thread_selector = hdr->hash.val[0] % announce_threads.size();
+				announce_threads[thread_selector]->post_announce(announce_msg { *hdr, from, fromlen});
 
-				if (s == 0)
-				{
-					// the swarm doesn't exist, we need to add it
-					s = new swarm;
-
-					pthread_rwlock_wrlock(&swarm_mutex);
-					// however, now that we've acquired the write lock,
-					// another thread may have already added it, make sure
-					// we still need to add it
-					i = swarms.find(hdr->hash);
-					if (i == swarms.end())
-					{
-						swarms.insert(std::make_pair(hdr->hash, s));
-					}
-					else
-					{
-						// it's OK to destruct it
-						// while holding the lock.
-						// this is the rare case
-						delete s;
-						s = i->second;
-					}
-					pthread_rwlock_unlock(&swarm_mutex);
-				}
-
-				char* buf;
-				int len;
-				iovec iov[2];
-				msghdr msg;
-				udp_announce_response resp;
-
-				resp.action = htonl(action_announce);
-				resp.transaction_id = hdr->transaction_id;
-				resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
-
-				msg.msg_name = (void*)&from;
-				msg.msg_namelen = fromlen;
-				msg.msg_iov = iov;
-				msg.msg_iovlen = 2;
-				msg.msg_control = 0;
-				msg.msg_controllen = 0;
-				msg.msg_flags = 0;
-
-				iov[0].iov_base = &resp;
-				iov[0].iov_len = 20;
-
-				swarm_lock l(*s);
-				s->announce(hdr, &buf, &len, &resp.downloaders, &resp.seeds);
-				resp.downloaders = htonl(resp.downloaders);
-				resp.seeds = htonl(resp.seeds);
-
-				iov[1].iov_base = buf;
-				iov[1].iov_len = len;
-//				fprintf(stderr, "sending %d bytes payload\n", len);
-
-				// silly loop just to deal with the potential EINTR
-				do
-				{
-					r = sendmsg(send_socket, &msg, MSG_NOSIGNAL);
-					if (r == -1)
-					{
-						if (errno == EINTR) continue;
-						fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
-						return 0;
-					}
-					bytes_out += r;
-				} while (false);
 				break;
 			}
+/*
 			case action_scrape:
 			{
 				if (!verify_connection_id(hdr->connection_id, &from))
@@ -383,11 +461,12 @@ void* tracker_thread()
 				}
 				pthread_rwlock_unlock(&swarm_mutex);
 
-				if (respond(send_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
-					return 0;
+				if (respond(m_socket, (char*)&resp, 8 + num_hashes * 12, (sockaddr*)&from, fromlen))
+					return;
 
 				break;
 			}
+*/
 			default:
 				printf("unknown action %d\n", ntohl(hdr->action));
 				++errors;
@@ -395,9 +474,7 @@ void* tracker_thread()
 		}
 	}
 
-	close(send_socket);
-
-	return 0;
+	return;
 }
 
 void sigint(int s)
@@ -410,8 +487,6 @@ int main(int argc, char* argv[])
 	// TODO: TEMP!
 //	allow_alternate_ip = true;
 
-	next_to_purge = swarms.begin();
-
 	// initialize secret key which the connection-ids are built off of
 	uint64_t secret_key = 0;
 	for (int i = 0; i < sizeof(secret_key); ++i)
@@ -422,13 +497,6 @@ int main(int argc, char* argv[])
 	SHA1_Init(&secret);
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
-	int r = pthread_rwlock_init(&swarm_mutex, 0);
-	if (r != 0)
-	{
-		fprintf(stderr, "pthread_rwlock_init failed (%d): %s\n", r, strerror(r));
-		return EXIT_FAILURE;
-	}
-
 	udp_socket = socket(PF_INET, SOCK_DGRAM, 0);
 	if (udp_socket < 0)
 	{
@@ -438,7 +506,7 @@ int main(int argc, char* argv[])
 	}
 
 	int opt = socket_buffer_size;
-	r = setsockopt(udp_socket, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt));
+	int r = setsockopt(udp_socket, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt));
 	if (r == -1)
 	{
 		fprintf(stderr, "failed to set socket receive buffer size (%d): %s\n"
@@ -473,14 +541,11 @@ int main(int argc, char* argv[])
 	}
 	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	
-	std::vector<std::thread> threads;
+	std::vector<announce_thread*> announce_threads;
+	std::vector<std::thread> receive_threads;
 
-	// create threads
-	for (int i = 0; i < num_threads; ++i)
-	{
-		printf("starting thread %d\n", i);
-		threads.push_back(std::thread(&tracker_thread));
-	}
+	int num_cores = std::thread::hardware_concurrency();
+	if (num_cores == 0) num_cores = 4;
 
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
@@ -499,6 +564,20 @@ int main(int argc, char* argv[])
 	}
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 
+	// create threads. We should create the same number of
+	// announce threads as we have cores on the machine
+	for (int i = 0; i < num_cores; ++i)
+	{
+		printf("starting announce thread %d\n", i);
+		announce_threads.push_back(new announce_thread());
+	}
+
+	for (int i = 0; i < num_threads; ++i)
+	{
+		printf("starting receive thread %d\n", i);
+		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads)));
+	}
+
 	while (!quit)
 	{
 		std::this_thread::sleep_for(std::chrono::seconds(60));
@@ -511,37 +590,18 @@ int main(int argc, char* argv[])
 		printf("c: %u a: %u s: %u e: %u in: %u kB out: %u kB\n"
 			, last_connects, last_announces, last_scrapes, last_errors
 			, last_bytes_in / 1000, last_bytes_out / 1000);
-
-		time_t now = time(0);
-
-		pthread_rwlock_rdlock(&swarm_mutex);
-		if (next_to_purge == swarms.end() && swarms.size() > 0)
-			next_to_purge = swarms.begin();
-
-		int num_to_purge = (std::min)(int(swarms.size()), 20);
-
-		for (int i = 0; i < num_to_purge; ++i)
-		{
-			if (next_to_purge == swarms.end()) next_to_purge = swarms.begin();
-			else ++next_to_purge;
-			if (next_to_purge == swarms.end()) break;
-
-			swarm* s = next_to_purge->second;
-			swarm_lock l(*s);
-			s->purge_stale(now);
-		}
-		pthread_rwlock_unlock(&swarm_mutex);
 	}
 
 	close(udp_socket);
 
-	for (int i = 0; i < num_threads; ++i)
-	{
-		threads[i].join();
-		printf("thread %d terminated\n", i);
-	}
+	for (std::thread& i : receive_threads)
+		i.join();
 
-	pthread_rwlock_destroy(&swarm_mutex);
+	for (announce_thread* i : announce_threads)
+	{
+		delete i;
+	}
+	announce_threads.clear();
 
 	return EXIT_SUCCESS;
 }
