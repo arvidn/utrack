@@ -31,14 +31,13 @@ Copyright (C) 2010-2013  Arvid Norberg
 using std::chrono::steady_clock;
 using std::chrono::seconds;
 
-extern sockaddr_in bind_addr;
-extern int socket_buffer_size;
 extern std::atomic<uint32_t> bytes_out;
 extern std::atomic<uint32_t> announces;
 extern std::atomic<uint32_t> dropped;
 extern std::atomic<uint32_t> scrapes;
 
 bool respond(int socket, char const* buf, int len, sockaddr const* to, socklen_t tolen);
+int create_socket(bool send = true);
 
 void announce_thread::thread_fun()
 {
@@ -51,44 +50,8 @@ void announce_thread::thread_fun()
 	}
 
 	// this is the sock this thread will use to send responses on
-	// to mitigate congestion on the receive sock
-	int sock = socket(PF_INET, SOCK_DGRAM, 0);
-	if (sock < 0)
-	{
-		fprintf(stderr, "failed to open send sock (%d): %s\n"
-			, errno, strerror(errno));
-		return;
-	}
-
-	int one = 1;
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEADDR on sock (%d): %s\n"
-			, errno, strerror(errno));
-	}
-
-#ifdef SO_REUSEPORT
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEPORT on sock (%d): %s\n"
-			, errno, strerror(errno));
-	}
-#endif
-
-	if (bind(sock, (sockaddr*)&bind_addr, sizeof(bind_addr)) < 0)
-	{
-		fprintf(stderr, "failed to bind send sock to port %d (%d): %s\n"
-			, ntohs(bind_addr.sin_port), errno, strerror(errno));
-		close(sock);
-		return;
-	}
-
-	int opt = socket_buffer_size;
-	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt)) < 0)
-	{
-		fprintf(stderr, "failed to set sock send buffer size (%d): %s\n"
-			, errno, strerror(errno));
-	}
+	// to mitigate congestion on the receive socket
+	int sock = create_socket();
 
 	steady_clock::time_point now = steady_clock::now();
 	steady_clock::time_point next_prune = now + seconds(10);

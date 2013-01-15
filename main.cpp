@@ -54,8 +54,6 @@ int interval = 1800;
 
 int listen_port = 8080;
 
-int num_threads = 4;
-
 int socket_buffer_size = 5 * 1024 * 1024;
 
 // set to true when we're shutting down
@@ -124,6 +122,53 @@ retry_send:
 	return 0;
 }
 
+int create_socket(bool send = true)
+{
+	int s = socket(PF_INET, SOCK_DGRAM, 0);
+	if (s < 0)
+	{
+		fprintf(stderr, "failed to open socket (%d): %s\n"
+			, errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	int opt = socket_buffer_size;
+	int r = setsockopt(s, SOL_SOCKET, send ? SO_SNDBUF : SO_RCVBUF, &opt, sizeof(opt));
+	if (r == -1)
+	{
+		fprintf(stderr, "failed to set socket receive buffer size (%d): %s\n"
+			, errno, strerror(errno));
+	}
+
+	int one = 1;
+	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+
+#ifdef SO_REUSEPORT
+	if (setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+#endif
+
+	memset(&bind_addr, 0, sizeof(bind_addr));
+	bind_addr.sin_family = AF_INET;
+	bind_addr.sin_addr.s_addr = INADDR_ANY;
+	bind_addr.sin_port = htons(listen_port);
+	r = bind(s, (sockaddr*)&bind_addr, sizeof(bind_addr));
+	if (r < 0)
+	{
+		fprintf(stderr, "failed to bind socket to port %d (%d): %s\n"
+			, listen_port, errno, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	return s;
+}
+
 // this thread receives incoming announces, parses them and posts
 // the announce to the correct announce thread, that then takes over
 // and is responsible for responding
@@ -136,6 +181,10 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 	{
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
+
+	// this is the sock this thread will use to send responses on
+	// to mitigate congestion on the receive socket
+//	int sock = create_socket();
 
 	sockaddr_in from;
 	// use uint64_t to make the buffer properly aligned
@@ -260,6 +309,8 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 				break;
 		}
 	}
+
+//	close(sock);
 }
 
 void sigint(int s)
@@ -270,7 +321,7 @@ void sigint(int s)
 int main(int argc, char* argv[])
 {
 	// TODO: TEMP!
-//	allow_alternate_ip = true;
+	allow_alternate_ip = true;
 
 	// initialize secret key which the connection-ids are built off of
 	uint64_t secret_key = 0;
@@ -282,48 +333,7 @@ int main(int argc, char* argv[])
 	SHA1_Init(&secret);
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
-	udp_socket = socket(PF_INET, SOCK_DGRAM, 0);
-	if (udp_socket < 0)
-	{
-		fprintf(stderr, "failed to open socket (%d): %s\n"
-			, errno, strerror(errno));
-		return EXIT_FAILURE;
-	}
-
-	int opt = socket_buffer_size;
-	int r = setsockopt(udp_socket, SOL_SOCKET, SO_RCVBUF, &opt, sizeof(opt));
-	if (r == -1)
-	{
-		fprintf(stderr, "failed to set socket receive buffer size (%d): %s\n"
-			, errno, strerror(errno));
-	}
-
-	int one = 1;
-	if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
-			, errno, strerror(errno));
-	}
-
-#ifdef SO_REUSEPORT
-	if (setsockopt(udp_socket, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
-			, errno, strerror(errno));
-	}
-#endif
-
-	memset(&bind_addr, 0, sizeof(bind_addr));
-	bind_addr.sin_family = AF_INET;
-	bind_addr.sin_addr.s_addr = INADDR_ANY;
-	bind_addr.sin_port = htons(listen_port);
-	r = bind(udp_socket, (sockaddr*)&bind_addr, sizeof(bind_addr));
-	if (r < 0)
-	{
-		fprintf(stderr, "failed to bind socket to port %d (%d): %s\n"
-			, listen_port, errno, strerror(errno));
-		return EXIT_FAILURE;
-	}
+	udp_socket = create_socket(false);
 	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	
 	std::vector<announce_thread*> announce_threads;
@@ -335,7 +345,7 @@ int main(int argc, char* argv[])
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = &sigint;
-	r = sigaction(SIGINT, &sa, 0);
+	int r = sigaction(SIGINT, &sa, 0);
 	if (r == -1)
 	{
 		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
