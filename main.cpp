@@ -362,16 +362,39 @@ int main(int argc, char* argv[])
 	// create threads. We should create the same number of
 	// announce threads as we have cores on the machine
 	printf("starting %d announce threads\n", num_cores);
+#if defined __linux__
+	cpu_set_ti* cpu = CPU_ALLOC(std::thread::hardware_concurrency());
+#endif
 	for (int i = 0; i < num_cores; ++i)
 	{
 		announce_threads.push_back(new announce_thread());
+
+		std::thread::native_handle_type h = announce_threads.back()->native_handle();
+
+#if defined __linux__
+		CPU_CLEAR(cpu);
+		CPU_SET(i, cpu);
+		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
+#else
+#endif
 	}
 
 	printf("starting %d receive threads\n", num_cores);
 	for (int i = 0; i < num_cores; ++i)
 	{
 		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads)));
+		std::thread::native_handle_type h = receive_threads.back().native_handle();
+
+#if defined __linux__
+		CPU_CLEAR(cpu);
+		CPU_SET(i, cpu);
+		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
+#else
+#endif
 	}
+#if defined __linux__
+	CPU_FREE(cpu);
+#endif
 
 	while (!quit)
 	{

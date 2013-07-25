@@ -54,6 +54,8 @@ struct announce_thread
 	void post_announce(announce_msg const& m);
 	~announce_thread();
 
+	std::thread::native_handle_type native_handle() { return m_thread.native_handle(); }
+
 private:
 
 	// job queue
