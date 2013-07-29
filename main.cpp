@@ -35,6 +35,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <atomic>
 #include <unordered_map>
 #include <deque>
+#include <cstdlib> // for rand()
 
 #include "swarm.hpp"
 #include "messages.hpp"
@@ -64,6 +65,7 @@ int udp_socket = -1;
 
 // partial SHA-1 hash of the secret key, combined with
 // source IP and port it forms the connection-id
+// TODO: use something more efficient than SHA-1
 SHA_CTX secret;
 
 // the address and port we receive packets on, and also
@@ -99,7 +101,7 @@ uint64_t generate_connection_id(sockaddr_in const* from)
 	return ret;
 }
 
-bool verify_connection_id(uint64_t conn_id, sockaddr_in* from)
+bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 {
 	char digest[20];
 	gen_secret_digest(from, digest);
@@ -169,6 +171,8 @@ int create_socket(bool send = true)
 	return s;
 }
 
+void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen, std::vector<announce_thread*>& announce_threads);
+
 // this thread receives incoming announces, parses them and posts
 // the announce to the correct announce thread, that then takes over
 // and is responsible for responding
@@ -201,116 +205,120 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
 			break;
 		}
-		bytes_in += size;
 
-//		printf("received message from: %x port: %d size: %d\n"
-//			, from.sin_addr.s_addr, ntohs(from.sin_port), size);
+		incoming_packet((char const*)buffer, size, &from, fromlen, announce_threads);
+	}
+}
 
-		if (size < 16)
-		{
-			printf("packet too short (%d)\n", size);
-			// log incorrect packet
-			continue;
-		}
+void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen, std::vector<announce_thread*>& announce_threads)
+{
+	bytes_in += size;
 
-		udp_announce_message* hdr = (udp_announce_message*)buffer;
+//	printf("received message from: %x port: %d size: %d\n"
+//		, from->sin_addr.s_addr, ntohs(from->sin_port), size);
 
-		switch (ntohl(hdr->action))
-		{
-			case action_connect:
-			{
-				if (be64toh(hdr->connection_id) != 0x41727101980LL)
-				{
-					++errors;
-					printf("invalid connection ID for connect message\n");
-					// log error
-					continue;
-				}
-				udp_connect_response resp;
-				resp.action = htonl(action_connect);
-				resp.connection_id = generate_connection_id(&from);
-				resp.transaction_id = hdr->transaction_id;
-				++connects;
-				if (respond(udp_socket, (char*)&resp, 16, (sockaddr*)&from, fromlen))
-					return;
-				break;
-			}
-			case action_announce:
-			{
-				if (!verify_connection_id(hdr->connection_id, &from))
-				{
-					printf("invalid connection ID\n");
-					++errors;
-					// log error
-					continue;
-				}
-				// technically the announce message should
-				// be 100 bytes, but uTorrent doesn't seem to send
-				// the extension field at the end
-				if (size < 98)
-				{
-					printf("announce packet too short. Expected 100, got %d\n", size);
-					++errors;
-					// log incorrect packet
-					continue;
-				}
-
-				if (!allow_alternate_ip || hdr->ip == 0)
-					hdr->ip = from.sin_addr.s_addr;
-
-				// post the announce to the thread that's responsible
-				// for this info-hash
-				announce_msg m;
-				m.bits.announce = *hdr;
-				m.from = from;
-				m.fromlen = fromlen;
-				int thread_selector = hdr->hash.val[0] % announce_threads.size();
-				announce_threads[thread_selector]->post_announce(m);
-
-				break;
-			}
-			case action_scrape:
-			{
-				if (!verify_connection_id(hdr->connection_id, &from))
-				{
-					printf("invalid connection ID for connect message\n");
-					++errors;
-					// log error
-					continue;
-				}
-				if (size < 16 + 20)
-				{
-					printf("scrape packet too short. Expected 36, got %d\n", size);
-					++errors;
-					// log error
-					continue;
-				}
-
-				udp_scrape_message* req = (udp_scrape_message*)buffer;
-
-				// for now, just support scrapes for a single hash at a time
-				// to avoid having to bounce the request around all the threads
-				// befor accruing all the stats
-
-				// post the announce to the thread that's responsible
-				// for this info-hash
-				announce_msg m;
-				m.bits.scrape = *req;
-				m.from = from;
-				m.fromlen = fromlen;
-				int thread_selector = req->hash[0].val[0] % announce_threads.size();
-				announce_threads[thread_selector]->post_announce(m);
-
-				break;
-			}
-			default:
-				printf("unknown action %d\n", ntohl(hdr->action));
-				++errors;
-				break;
-		}
+	if (size < 16)
+	{
+		printf("packet too short (%d)\n", size);
+		// log incorrect packet
+		return;
 	}
 
-//	close(sock);
+	udp_announce_message* hdr = (udp_announce_message*)buf;
+
+	switch (ntohl(hdr->action))
+	{
+		case action_connect:
+		{
+			if (be64toh(hdr->connection_id) != 0x41727101980LL)
+			{
+				++errors;
+				printf("invalid connection ID for connect message\n");
+				// log error
+				return;
+			}
+			udp_connect_response resp;
+			resp.action = htonl(action_connect);
+			resp.connection_id = generate_connection_id(from);
+			resp.transaction_id = hdr->transaction_id;
+			++connects;
+			if (respond(udp_socket, (char*)&resp, 16, (sockaddr*)from, fromlen))
+				return;
+			break;
+		}
+		case action_announce:
+		{
+			if (!verify_connection_id(hdr->connection_id, from))
+			{
+				printf("invalid connection ID\n");
+				++errors;
+				// log error
+				return;
+			}
+			// technically the announce message should
+			// be 100 bytes, but uTorrent doesn't seem to send
+			// the extension field at the end
+			if (size < 98)
+			{
+				printf("announce packet too short. Expected 100, got %d\n", size);
+				++errors;
+				// log incorrect packet
+				return;
+			}
+
+			if (!allow_alternate_ip || hdr->ip == 0)
+				hdr->ip = from->sin_addr.s_addr;
+
+			// post the announce to the thread that's responsible
+			// for this info-hash
+			announce_msg m;
+			m.bits.announce = *hdr;
+			m.from = *from;
+			m.fromlen = fromlen;
+			int thread_selector = hdr->hash.val[0] % announce_threads.size();
+			announce_threads[thread_selector]->post_announce(m);
+
+			break;
+		}
+		case action_scrape:
+		{
+			if (!verify_connection_id(hdr->connection_id, from))
+			{
+				printf("invalid connection ID for connect message\n");
+				++errors;
+				// log error
+				return;
+			}
+			if (size < 16 + 20)
+			{
+				printf("scrape packet too short. Expected 36, got %d\n", size);
+				++errors;
+				// log error
+				return;
+			}
+
+			udp_scrape_message* req = (udp_scrape_message*)buf;
+
+			// for now, just support scrapes for a single hash at a time
+			// to avoid having to bounce the request around all the threads
+			// befor accruing all the stats
+
+			// post the announce to the thread that's responsible
+			// for this info-hash
+			announce_msg m;
+			m.bits.scrape = *req;
+			m.from = *from;
+			m.fromlen = fromlen;
+			int thread_selector = req->hash[0].val[0] % announce_threads.size();
+			announce_threads[thread_selector]->post_announce(m);
+
+			break;
+		}
+		default:
+			printf("unknown action %d\n", ntohl(hdr->action));
+			++errors;
+			break;
+	}
 }
 
 void sigint(int s)
@@ -328,7 +336,8 @@ int main(int argc, char* argv[])
 	for (int i = 0; i < sizeof(secret_key); ++i)
 	{
 		secret_key <<= 8;
-		secret_key ^= rand();
+		// TODO: use a c++11 random function instead
+		secret_key ^= std::rand();
 	}
 	SHA1_Init(&secret);
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));

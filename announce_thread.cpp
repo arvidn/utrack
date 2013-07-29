@@ -19,6 +19,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include "announce_thread.hpp"
 #include <atomic>
 #include <chrono>
+#include <cstdlib> // for rand()
 
 #include <signal.h>
 #include <unistd.h>
@@ -114,7 +115,8 @@ void announce_thread::thread_fun()
 
 					resp.action = htonl(action_announce);
 					resp.transaction_id = m.bits.announce.transaction_id;
-					resp.interval = htonl(1680 + rand() * 240 / RAND_MAX);
+					// TODO: use a c++11 random function, or something more efficient
+					resp.interval = htonl(1680 + std::rand() * 240 / RAND_MAX);
 
 					// do the actual announce with the swarm
 					// and get a pointer to the peers back
@@ -127,7 +129,7 @@ void announce_thread::thread_fun()
 
 					// set up the iovec array for the response. The header + the
 					// body with the peer list
-					iovec iov[2] = { { &resp, 20}, { buf, len } };
+					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
 					msg.msg_name = (void*)&m.from;
 					msg.msg_namelen = m.fromlen;
