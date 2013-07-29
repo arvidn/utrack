@@ -93,7 +93,7 @@ void gen_secret_digest(sockaddr_in const* from, char* digest)
 
 uint64_t generate_connection_id(sockaddr_in const* from)
 {
-//#error add an option to use an insecure, cheap method
+//TODO: add an option to use an insecure, cheap method
 	char digest[20];
 	gen_secret_digest(from, digest);
 	uint64_t ret;
@@ -109,18 +109,29 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 }
 
 // send a packet and retry on EINTR
-bool respond(int sock, char const* buf, int len, sockaddr const* to, socklen_t tolen)
+bool respond(int sock, iovec const* v, int num, sockaddr const* to, socklen_t tolen)
 {
-	ssize_t ret = 0;
-retry_send:
-	ret = sendto(sock, buf, len, MSG_NOSIGNAL, to, tolen);
-	if (ret == -1)
+	msghdr msg;
+	msg.msg_name = (void*)to;
+	msg.msg_namelen = tolen;
+	msg.msg_iov = (iovec*)v;
+	msg.msg_iovlen = num;
+	msg.msg_control = 0;
+	msg.msg_controllen = 0;
+	msg.msg_flags = 0;
+
+	// silly loop just to deal with the potential EINTR
+	do
 	{
-		if (errno == EINTR) goto retry_send;
-		fprintf(stderr, "sendto failed (%d): %s\n", errno, strerror(errno));
-		return 1;
-	}
-	bytes_out += ret;
+		int r = sendmsg(sock, &msg, MSG_NOSIGNAL);
+		if (r == -1)
+		{
+			if (errno == EINTR) continue;
+			fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
+			return 1;
+		}
+		bytes_out += r;
+	} while (false);
 	return 0;
 }
 
@@ -242,7 +253,8 @@ void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen
 			resp.connection_id = generate_connection_id(from);
 			resp.transaction_id = hdr->transaction_id;
 			++connects;
-			if (respond(udp_socket, (char*)&resp, 16, (sockaddr*)from, fromlen))
+			iovec iov = { &resp, 16};
+			if (respond(udp_socket, &iov, 1, (sockaddr*)from, fromlen))
 				return;
 			break;
 		}

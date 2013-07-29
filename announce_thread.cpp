@@ -37,7 +37,8 @@ extern std::atomic<uint32_t> announces;
 extern std::atomic<uint32_t> dropped;
 extern std::atomic<uint32_t> scrapes;
 
-bool respond(int socket, char const* buf, int len, sockaddr const* to, socklen_t tolen);
+// defined in main.cpp
+bool respond(int sock, iovec const* v, int num, sockaddr const* to, socklen_t tolen);
 int create_socket(bool send = true);
 
 void announce_thread::thread_fun()
@@ -110,7 +111,6 @@ void announce_thread::thread_fun()
 					// prepare the buffer to write the response to
 					char* buf;
 					int len;
-					msghdr msg;
 					udp_announce_response resp;
 
 					resp.action = htonl(action_announce);
@@ -131,26 +131,8 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					msg.msg_name = (void*)&m.from;
-					msg.msg_namelen = m.fromlen;
-					msg.msg_iov = iov;
-					msg.msg_iovlen = 2;
-					msg.msg_control = 0;
-					msg.msg_controllen = 0;
-					msg.msg_flags = 0;
-
-					// silly loop just to deal with the potential EINTR
-					do
-					{
-						r = sendmsg(sock, &msg, MSG_NOSIGNAL);
-						if (r == -1)
-						{
-							if (errno == EINTR) continue;
-							fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
-							return;
-						}
-						bytes_out += r;
-					} while (false);
+					if (respond(sock, iov, 2, (sockaddr*)&m.from, m.fromlen))
+						return;
 					break;
 				}
 			case action_scrape:
@@ -171,7 +153,8 @@ void announce_thread::thread_fun()
 						resp.data[0].downloaders = htonl(resp.data[0].downloaders);
 					}
 
-					if (respond(sock, (char*)&resp, 8 + 12, (sockaddr*)&m.from, m.fromlen))
+					iovec iov = { &resp, 8 + 12};
+					if (respond(sock, &iov, 1, (sockaddr*)&m.from, m.fromlen))
 						return;
 
 					break;
