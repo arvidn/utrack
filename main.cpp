@@ -41,6 +41,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include "messages.hpp"
 #include "endian.hpp"
 #include "announce_thread.hpp"
+#include "socket.hpp"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -60,17 +61,10 @@ int socket_buffer_size = 5 * 1024 * 1024;
 // set to true when we're shutting down
 volatile bool quit = false;
 
-// this is the UDP socket we accept tracker announces to
-int udp_socket = -1;
-
 // partial SHA-1 hash of the secret key, combined with
 // source IP and port it forms the connection-id
 // TODO: use something more efficient than SHA-1
 SHA_CTX secret;
-
-// the address and port we receive packets on, and also
-// for sending responses (although over a separate socket)
-sockaddr_in bind_addr;
 
 // stats counters
 std::atomic<uint32_t> connects = ATOMIC_VAR_INIT(0);
@@ -108,81 +102,8 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 	return memcmp((char*)&conn_id, digest, sizeof(conn_id)) == 0;
 }
 
-// send a packet and retry on EINTR
-bool respond(int sock, iovec const* v, int num, sockaddr const* to, socklen_t tolen)
-{
-	msghdr msg;
-	msg.msg_name = (void*)to;
-	msg.msg_namelen = tolen;
-	msg.msg_iov = (iovec*)v;
-	msg.msg_iovlen = num;
-	msg.msg_control = 0;
-	msg.msg_controllen = 0;
-	msg.msg_flags = 0;
-
-	// silly loop just to deal with the potential EINTR
-	do
-	{
-		int r = sendmsg(sock, &msg, MSG_NOSIGNAL);
-		if (r == -1)
-		{
-			if (errno == EINTR) continue;
-			fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
-			return 1;
-		}
-		bytes_out += r;
-	} while (false);
-	return 0;
-}
-
-int create_socket(bool send = true)
-{
-	int s = socket(PF_INET, SOCK_DGRAM, 0);
-	if (s < 0)
-	{
-		fprintf(stderr, "failed to open socket (%d): %s\n"
-			, errno, strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-
-	int opt = socket_buffer_size;
-	int r = setsockopt(s, SOL_SOCKET, send ? SO_SNDBUF : SO_RCVBUF, &opt, sizeof(opt));
-	if (r == -1)
-	{
-		fprintf(stderr, "failed to set socket receive buffer size (%d): %s\n"
-			, errno, strerror(errno));
-	}
-
-	int one = 1;
-	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
-			, errno, strerror(errno));
-	}
-
-#ifdef SO_REUSEPORT
-	if (setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
-	{
-		fprintf(stderr, "failed to set SO_REUSEPORT on socket (%d): %s\n"
-			, errno, strerror(errno));
-	}
-#endif
-
-	memset(&bind_addr, 0, sizeof(bind_addr));
-	bind_addr.sin_family = AF_INET;
-	bind_addr.sin_addr.s_addr = INADDR_ANY;
-	bind_addr.sin_port = htons(listen_port);
-	r = bind(s, (sockaddr*)&bind_addr, sizeof(bind_addr));
-	if (r < 0)
-	{
-		fprintf(stderr, "failed to bind socket to port %d (%d): %s\n"
-			, listen_port, errno, strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	return s;
-}
-
-void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen, std::vector<announce_thread*>& announce_threads);
+void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
+	, packet_socket& sock, std::vector<announce_thread*>& announce_threads);
 
 // this thread receives incoming announces, parses them and posts
 // the announce to the correct announce thread, that then takes over
@@ -199,29 +120,22 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 
 	// this is the sock this thread will use to send responses on
 	// to mitigate congestion on the receive socket
-//	int sock = create_socket();
+	packet_socket sock(true);
 
-	sockaddr_in from;
-	// use uint64_t to make the buffer properly aligned
-	uint64_t buffer[1500/8];
+	incoming_packet_t pkts[512];
 
 	for (;;)
 	{
-		socklen_t fromlen = sizeof(from);
-		int size = recvfrom(udp_socket, (char*)buffer, sizeof(buffer), 0
-			, (sockaddr*)&from, &fromlen);
-		if (size == -1)
-		{
-			if (errno == EINTR) continue;
-			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
-			break;
-		}
-
-		incoming_packet((char const*)buffer, size, &from, fromlen, announce_threads);
+		int recvd = sock.receive(pkts, sizeof(pkts)/sizeof(pkts[0]));
+		if (recvd <= 0) break;
+		for (int i = 0; i < recvd; ++i)
+			incoming_packet(pkts[i].buffer, pkts[i].buflen, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen
+				, sock, announce_threads);
 	}
 }
 
-void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen, std::vector<announce_thread*>& announce_threads)
+void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
+	, packet_socket& sock, std::vector<announce_thread*>& announce_threads)
 {
 	bytes_in += size;
 
@@ -254,7 +168,7 @@ void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen
 			resp.transaction_id = hdr->transaction_id;
 			++connects;
 			iovec iov = { &resp, 16};
-			if (respond(udp_socket, &iov, 1, (sockaddr*)from, fromlen))
+			if (sock.send(&iov, 1, (sockaddr*)from, fromlen))
 				return;
 			break;
 		}
@@ -354,7 +268,6 @@ int main(int argc, char* argv[])
 	SHA1_Init(&secret);
 	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
-	udp_socket = create_socket(false);
 	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	
 	std::vector<announce_thread*> announce_threads;
@@ -390,9 +303,8 @@ int main(int argc, char* argv[])
 	{
 		announce_threads.push_back(new announce_thread());
 
-		std::thread::native_handle_type h = announce_threads.back()->native_handle();
-
 #if defined __linux__
+		std::thread::native_handle_type h = announce_threads.back()->native_handle();
 		CPU_CLEAR(cpu);
 		CPU_SET(i, cpu);
 		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
@@ -404,9 +316,8 @@ int main(int argc, char* argv[])
 	for (int i = 0; i < num_cores; ++i)
 	{
 		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads)));
-		std::thread::native_handle_type h = receive_threads.back().native_handle();
-
 #if defined __linux__
+		std::thread::native_handle_type h = receive_threads.back().native_handle();
 		CPU_CLEAR(cpu);
 		CPU_SET(i, cpu);
 		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
@@ -419,7 +330,7 @@ int main(int argc, char* argv[])
 
 	while (!quit)
 	{
-		std::this_thread::sleep_for(std::chrono::seconds(60));
+		std::this_thread::sleep_for(std::chrono::seconds(10));
 		uint32_t last_connects = connects.exchange(0);
 		uint32_t last_announces = announces.exchange(0);
 		uint32_t last_scrapes = scrapes.exchange(0);
@@ -428,11 +339,9 @@ int main(int argc, char* argv[])
 		uint32_t last_bytes_out = bytes_out.exchange(0);
 		uint32_t last_dropped = dropped.exchange(0);
 		printf("c: %u a: %u s: %u e: %u d: %u in: %u kB out: %u kB\n"
-			, last_connects, last_announces, last_scrapes, last_errors
-			, last_dropped, last_bytes_in / 1000, last_bytes_out / 1000);
+			, last_connects / 10, last_announces / 10, last_scrapes / 10, last_errors / 10
+			, last_dropped / 10, last_bytes_in / 1000, last_bytes_out / 1000);
 	}
-
-	close(udp_socket);
 
 	for (std::thread& i : receive_threads)
 		i.join();

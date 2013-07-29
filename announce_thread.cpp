@@ -17,6 +17,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 */
 
 #include "announce_thread.hpp"
+#include "socket.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdlib> // for rand()
@@ -37,10 +38,6 @@ extern std::atomic<uint32_t> announces;
 extern std::atomic<uint32_t> dropped;
 extern std::atomic<uint32_t> scrapes;
 
-// defined in main.cpp
-bool respond(int sock, iovec const* v, int num, sockaddr const* to, socklen_t tolen);
-int create_socket(bool send = true);
-
 void announce_thread::thread_fun()
 {
 	sigset_t sig;
@@ -51,9 +48,9 @@ void announce_thread::thread_fun()
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 
-	// this is the sock this thread will use to send responses on
+	// this is the socket this thread will use to send responses on
 	// to mitigate congestion on the receive socket
-	int sock = create_socket();
+	packet_socket sock;
 
 	steady_clock::time_point now = steady_clock::now();
 	steady_clock::time_point next_prune = now + seconds(10);
@@ -131,7 +128,7 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					if (respond(sock, iov, 2, (sockaddr*)&m.from, m.fromlen))
+					if (sock.send(iov, 2, (sockaddr*)&m.from, m.fromlen))
 						return;
 					break;
 				}
@@ -154,7 +151,7 @@ void announce_thread::thread_fun()
 					}
 
 					iovec iov = { &resp, 8 + 12};
-					if (respond(sock, &iov, 1, (sockaddr*)&m.from, m.fromlen))
+					if (sock.send(&iov, 1, (sockaddr*)&m.from, m.fromlen))
 						return;
 
 					break;
@@ -162,8 +159,6 @@ void announce_thread::thread_fun()
 			}
 		}
 	}
-
-	close(sock);
 }
 
 void announce_thread::post_announce(announce_msg const& m)
