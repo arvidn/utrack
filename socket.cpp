@@ -139,6 +139,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	sockaddr_in from;
 	socklen_t fromlen = sizeof(from);
 
+	// TODO;: it could be faster to drain the UDP socket in a loop here, since the kernel code path is hot in the cache
 	int size;
 	do
 	{

@@ -48,10 +48,6 @@ void announce_thread::thread_fun()
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 
-	// this is the socket this thread will use to send responses on
-	// to mitigate congestion on the receive socket
-	packet_socket sock;
-
 	steady_clock::time_point now = steady_clock::now();
 	steady_clock::time_point next_prune = now + seconds(10);
 
@@ -128,7 +124,7 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					if (sock.send(iov, 2, (sockaddr*)&m.from, m.fromlen))
+					if (m_sock.send(iov, 2, (sockaddr*)&m.from, m.fromlen))
 						return;
 					break;
 				}
@@ -151,7 +147,7 @@ void announce_thread::thread_fun()
 					}
 
 					iovec iov = { &resp, 8 + 12};
-					if (sock.send(&iov, 1, (sockaddr*)&m.from, m.fromlen))
+					if (m_sock.send(&iov, 1, (sockaddr*)&m.from, m.fromlen))
 						return;
 
 					break;

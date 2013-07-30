@@ -40,12 +40,14 @@ struct announce_msg
 	socklen_t fromlen;
 };
 
+struct send_socket;
+
 // this is a thread that handles the announce for a specific
 // set of info-hashes, and then sends a response over its own
 // UDP socket
 struct announce_thread
 {
-	announce_thread() : m_quit(false), m_thread( [=]() { thread_fun(); } ) {}
+	announce_thread(send_socket& ss) : m_quit(false), m_sock(ss), m_thread( [=]() { thread_fun(); } ) {}
 
 	announce_thread(announce_thread const&) = delete;
 	announce_thread& operator=(announce_thread const&) = delete;
@@ -67,6 +69,8 @@ private:
 	// swarms are pinned to certain threads based on their info-hash
 	typedef std::unordered_map<sha1_hash, swarm, sha1_hash_fun> swarm_map_t;
 	swarm_map_t m_swarms;
+
+	send_socket& m_sock;
 
 	bool m_quit;
 	std::thread m_thread;

@@ -20,7 +20,9 @@ Copyright (C) 2013  Arvid Norberg
 #define _PACKET_SOCKET_HPP_
 
 #include <cstdint>
-#include <netinet/in.h>
+#include <atomic>
+#include <vector>
+#include <netinet/in.h> // for sockaddr
 
 struct incoming_packet_t
 {
@@ -48,6 +50,26 @@ private:
 	// this buffer is aligned
 	uint64_t m_buffer[1500/8];
 	bool m_receive;
+};
+
+struct send_socket
+{
+	send_socket() : m_rr(0)
+	{
+		for (int i = 0; i < 4; ++i)
+			m_sockets.push_back(packet_socket());
+	}
+
+	bool send(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
+	{
+		// TODO: is it better to have thread affinity here?
+		int idx = m_rr++ & 0x3;
+		return m_sockets[idx].send(v, num, to, tolen);
+	}
+
+private:
+	std::vector<packet_socket> m_sockets;
+	std::atomic<uint32_t> m_rr;
 };
 
 #endif // _PACKET_SOCKET_HPP_

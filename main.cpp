@@ -87,7 +87,7 @@ void gen_secret_digest(sockaddr_in const* from, char* digest)
 
 uint64_t generate_connection_id(sockaddr_in const* from)
 {
-//TODO: add an option to use an insecure, cheap method
+//TODO: add an option to use a less secure, cheap method
 	char digest[20];
 	gen_secret_digest(from, digest);
 	uint64_t ret;
@@ -103,12 +103,12 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 }
 
 void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
-	, packet_socket& sock, std::vector<announce_thread*>& announce_threads);
+	, send_socket& sock, std::vector<announce_thread*>& announce_threads);
 
 // this thread receives incoming announces, parses them and posts
 // the announce to the correct announce thread, that then takes over
 // and is responsible for responding
-void receive_thread(std::vector<announce_thread*>& announce_threads)
+void receive_thread(std::vector<announce_thread*>& announce_threads, send_socket& ss)
 {
 	sigset_t sig;
 	sigfillset(&sig);
@@ -130,12 +130,12 @@ void receive_thread(std::vector<announce_thread*>& announce_threads)
 		if (recvd <= 0) break;
 		for (int i = 0; i < recvd; ++i)
 			incoming_packet(pkts[i].buffer, pkts[i].buflen, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen
-				, sock, announce_threads);
+				, ss, announce_threads);
 	}
 }
 
 void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
-	, packet_socket& sock, std::vector<announce_thread*>& announce_threads)
+	, send_socket& sock, std::vector<announce_thread*>& announce_threads)
 {
 	bytes_in += size;
 
@@ -272,6 +272,7 @@ int main(int argc, char* argv[])
 	
 	std::vector<announce_thread*> announce_threads;
 	std::vector<std::thread> receive_threads;
+	std::vector<packet_socket> send_sockets;
 
 	int num_cores = std::thread::hardware_concurrency();
 	if (num_cores == 0) num_cores = 4;
@@ -293,6 +294,8 @@ int main(int argc, char* argv[])
 	}
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 
+	send_socket ss;
+
 	// create threads. We should create the same number of
 	// announce threads as we have cores on the machine
 	printf("starting %d announce threads\n", num_cores);
@@ -301,7 +304,7 @@ int main(int argc, char* argv[])
 #endif
 	for (int i = 0; i < num_cores; ++i)
 	{
-		announce_threads.push_back(new announce_thread());
+		announce_threads.push_back(new announce_thread(ss));
 
 #if defined __linux__
 		std::thread::native_handle_type h = announce_threads.back()->native_handle();
@@ -315,7 +318,7 @@ int main(int argc, char* argv[])
 	printf("starting %d receive threads\n", num_cores);
 	for (int i = 0; i < num_cores; ++i)
 	{
-		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads)));
+		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads), std::ref(ss)));
 #if defined __linux__
 		std::thread::native_handle_type h = receive_threads.back().native_handle();
 		CPU_CLEAR(cpu);
