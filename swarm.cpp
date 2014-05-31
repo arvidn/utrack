@@ -3,6 +3,8 @@
 #include <iterator>
 #include <stdio.h>
 
+#include "config.hpp"
+
 swarm::swarm()
 	: m_seeds(0)
 	, m_downloaders(0)
@@ -56,9 +58,9 @@ void swarm::announce(steady_clock::time_point now, udp_announce_message const* h
 		}
 		// insert this peer
 
-		// a swarm doesn't need more than 300000 peers in the tracker's
-		// peerlist to stay well connected and healthy
-		if (m_peers4.size() >= 300000)
+		// Assume a swarm doesn't need more than this many peers in the tracker's
+		// peer list to stay well connected and healthy
+		if (m_peers4.size() >= max_peerlist_size)
 		{
 			// remove one random peer
 			hash_map4_t::iterator del = m_peers4.begin();
@@ -133,7 +135,7 @@ void swarm::announce(steady_clock::time_point now, udp_announce_message const* h
 		m_ips4[e.index] = peer_ip4(hdr->ip, hdr->port);
 	}
 
-	size_t num_want = (std::min)((std::min)(size_t(200)
+	size_t num_want = (std::min)((std::min)(size_t(default_num_want)
 		, size_t(m_ips4.size())), size_t(ntohl(hdr->num_want)));
 
 	if (num_want <= 0)
@@ -185,6 +187,8 @@ void swarm::erase_peer(swarm::hash_map4_t::iterator i)
 
 void swarm::purge_stale(steady_clock::time_point now)
 {
+	if (m_peers4.empty()) return;
+
 	// the interval setting
 	extern int interval;
 
@@ -192,16 +196,13 @@ void swarm::purge_stale(steady_clock::time_point now)
 
 	for (int i = 0; i < num; ++i)
 	{
-		if (m_last_purge == m_peers4.end() && !m_peers4.empty())
+		if (m_last_purge == m_peers4.end())
 			m_last_purge = m_peers4.begin();
 
 		// check the next peer for timeout
-		if (m_last_purge != m_peers4.end())
-		{
-			hash_map4_t::iterator i = m_last_purge++;
-			if (i->second.last_announce < now - seconds(interval + interval / 2))
-				erase_peer(i);
-		}
+		hash_map4_t::iterator i = m_last_purge++;
+		if (i->second.last_announce < now - seconds(interval + interval / 2))
+			erase_peer(i);
 	}
 }
 

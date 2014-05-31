@@ -15,6 +15,9 @@ Copyright (C) 2014  Arvid Norberg
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#ifndef _KEY_ROTATE_HPP_
+#define _KEY_ROTATE_HPP_
+
 #include <chrono>
 #include <array>
 #include <atomic>
@@ -41,6 +44,7 @@ private:
 		// threads are reading
 		uint8_t padding[64-16];
 	};
+
 	// these are the rotating secret keys. There are 3 keys so that we
 	// can generate a new one in the 3:rd slot without being worried about
 	// it being used by any other thread. The most recent secret is
@@ -54,4 +58,6 @@ private:
 	std::atomic<std::uint32_t> m_current;
 	std::chrono::steady_clock::time_point m_last_rotate;
 };
+
+#endif
 

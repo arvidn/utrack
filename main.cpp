@@ -53,11 +53,9 @@ Copyright (C) 2010-2013  Arvid Norberg
 // it allows for spoofing
 bool allow_alternate_ip = false;
 
-int interval = 1800;
+int interval = default_interval;
 
 int listen_port = 8080;
-
-int socket_buffer_size = 5 * 1024 * 1024;
 
 // set to true when we're shutting down
 volatile bool quit = false;
