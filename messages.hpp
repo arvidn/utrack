@@ -32,19 +32,6 @@ inline bool operator==(sha1_hash const& lhs, sha1_hash const& rhs)
 	return memcmp(lhs.val, rhs.val, 20) == 0;
 }
 
-struct sha1_hash_fun
-{
-	size_t operator()(sha1_hash const& h) const
-	{
-		size_t ret = 0;
-		for (int i = 0; i < 5; ++i)
-		{
-			ret ^= h.val[i];
-		}
-		return ret;
-	}
-};
-
 enum
 {
 	max_scrape_responses = 71

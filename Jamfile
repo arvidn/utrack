@@ -1,3 +1,9 @@
+install stage-test : udp_test : <location>. ;
+install stage : utrack : <location>. ;
+
+explicit stage-test ;
+explicit stage ;
+
 exe utrack : main.cpp swarm.cpp swarm.hpp messages.hpp announce_thread.cpp
 	announce_thread.hpp socket.hpp socket.cpp siphash24.c key_rotate.cpp ;
 

@@ -84,7 +84,8 @@ std::uint64_t gen_secret_digest(sockaddr_in const* from
 {
 	std::array<std::uint8_t, sizeof(from->sin_addr) + sizeof(from->sin_port)> ep;
 	memcpy(ep.data(), (char*)&from->sin_addr, sizeof(from->sin_addr));
-	memcpy(ep.data() + sizeof(from->sin_addr), (char*)&from->sin_port, sizeof(from->sin_port));
+	memcpy(ep.data() + sizeof(from->sin_addr), (char*)&from->sin_port
+		, sizeof(from->sin_port));
 
 	std::uint64_t ret;
 	siphash((std::uint8_t*)&ret, ep.data(), ep.size(), key.data());
@@ -202,7 +203,10 @@ void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen
 			m.bits.announce = *hdr;
 			m.from = *from;
 			m.fromlen = fromlen;
-			int thread_selector = hdr->hash.val[0] % announce_threads.size();
+
+			// use siphash here to prevent hash collision attacks causing one
+			// thread to overload
+			int thread_selector = siphash_fun()(hdr->hash) % announce_threads.size();
 			announce_threads[thread_selector]->post_announce(m);
 
 			break;
@@ -308,7 +312,7 @@ int main(int argc, char* argv[])
 	printf("starting %d receive threads\n", num_cores);
 	for (int i = 0; i < num_cores; ++i)
 	{
-		receive_threads.push_back(std::thread(receive_thread, std::ref(announce_threads), std::ref(ss)));
+		receive_threads.emplace_back(receive_thread, std::ref(announce_threads), std::ref(ss));
 #if defined __linux__
 		std::thread::native_handle_type h = receive_threads.back().native_handle();
 		CPU_CLEAR(cpu);

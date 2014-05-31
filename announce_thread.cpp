@@ -20,6 +20,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include "socket.hpp"
 #include <atomic>
 #include <chrono>
+#include <random>
 #include <cstdlib> // for rand()
 
 #include <signal.h>
@@ -37,6 +38,14 @@ extern std::atomic<uint32_t> bytes_out;
 extern std::atomic<uint32_t> announces;
 extern std::atomic<uint32_t> dropped;
 extern std::atomic<uint32_t> scrapes;
+
+std::array<uint8_t, 16> gen_random_key()
+{
+	std::array<uint8_t, 16> ret;
+	std::random_device dev;
+	std::generate(ret.begin(), ret.end(), std::ref(dev));
+	return ret;
+}
 
 void announce_thread::thread_fun()
 {

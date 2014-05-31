@@ -26,8 +26,8 @@ key_rotate::key_rotate()
 	, m_last_rotate(steady_clock::now())
 {
 	std::random_device dev;
-	std::generate(m_secrets[0].begin(), m_secrets[0].end(), std::ref(dev));
-	std::generate(m_secrets[1].begin(), m_secrets[1].end(), std::ref(dev));
+	std::generate(m_secrets[0].key.begin(), m_secrets[0].key.end(), std::ref(dev));
+	std::generate(m_secrets[1].key.begin(), m_secrets[1].key.end(), std::ref(dev));
 }
 
 void key_rotate::tick()
@@ -38,17 +38,17 @@ void key_rotate::tick()
 	std::uint32_t next_cur = (m_current.load() + 1 ) % 3;
 
 	std::random_device dev;
-	std::generate(m_secrets[next_cur].begin(), m_secrets[next_cur].end(), std::ref(dev));
+	std::generate(m_secrets[next_cur].key.begin(), m_secrets[next_cur].key.end(), std::ref(dev));
 	m_current = next_cur;
 }
 
 std::array<std::uint8_t, 16> const& key_rotate::cur_key() const
 {
-	return m_secrets[m_current.load()];
+	return m_secrets[m_current.load()].key;
 }
 
 std::array<std::uint8_t, 16> const& key_rotate::prev_key() const
 {
-	return m_secrets[(m_current.load() - 1) % 3];
+	return m_secrets[(m_current.load() - 1) % 3].key;
 }
 

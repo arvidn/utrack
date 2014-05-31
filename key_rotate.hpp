@@ -33,6 +33,14 @@ struct key_rotate
 
 private:
 
+	struct secret_key_t
+	{
+		std::array<std::uint8_t, 16> key;
+		// place all keys in separate cache lines so that
+		// writing a new one doesn't evict the ones the other
+		// threads are reading
+		uint8_t padding[64-16];
+	};
 	// these are the rotating secret keys. There are 3 keys so that we
 	// can generate a new one in the 3:rd slot without being worried about
 	// it being used by any other thread. The most recent secret is
@@ -42,7 +50,7 @@ private:
 	// current_secret is incremented (and wrapped at 3).
 	// secrets[(current_secrets - 1)%3]
 
-	std::array<std::uint8_t, 16> m_secrets[3];
+	secret_key_t m_secrets[3];
 	std::atomic<std::uint32_t> m_current;
 	std::chrono::steady_clock::time_point m_last_rotate;
 };

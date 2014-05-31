@@ -28,6 +28,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <thread>
 #include <queue>
 #include <unordered_map>
+#include <array>
 
 struct announce_msg
 {
@@ -42,13 +43,41 @@ struct announce_msg
 
 struct send_socket;
 
+extern "C" int siphash(unsigned char *out, const unsigned char *in
+	, unsigned long long inlen, const unsigned char *k);
+
+std::array<uint8_t, 16> gen_random_key();
+
+struct siphash_fun
+{
+	size_t operator()(sha1_hash const& h) const
+	{
+		// this is the secret key used in siphash to prevent hashcolision
+		// attacks. It's initialized to random bytes on startup (or first use)
+		static std::array<uint8_t, 16> hash_key = gen_random_key();
+
+		std::uint64_t ret;
+		siphash((std::uint8_t*)&ret, (std::uint8_t const*)h.val, sizeof(h.val)
+			, hash_key.data());
+		return ret;
+	}
+};
+
 // this is a thread that handles the announce for a specific
 // set of info-hashes, and then sends a response over its own
 // UDP socket
 struct announce_thread
 {
-	announce_thread(send_socket& ss) : m_quit(false), m_sock(ss), m_thread( [=]() { thread_fun(); } ) {}
+	announce_thread(send_socket& ss)
+		: m_sock(ss)
+		, m_quit(false)
+		, m_thread( [=]() { thread_fun(); } ) {}
 
+	// allow move
+	announce_thread(announce_thread&&) = default;
+	announce_thread& operator=(announce_thread&&) = default;
+
+	// disallow copy
 	announce_thread(announce_thread const&) = delete;
 	announce_thread& operator=(announce_thread const&) = delete;
 
@@ -67,7 +96,7 @@ private:
 
 	// the swarm hash table. Each thread has its own hash table of swarms.
 	// swarms are pinned to certain threads based on their info-hash
-	typedef std::unordered_map<sha1_hash, swarm, sha1_hash_fun> swarm_map_t;
+	typedef std::unordered_map<sha1_hash, swarm, siphash_fun> swarm_map_t;
 	swarm_map_t m_swarms;
 
 	send_socket& m_sock;
