@@ -200,9 +200,9 @@ void swarm::purge_stale(steady_clock::time_point now)
 			m_last_purge = m_peers4.begin();
 
 		// check the next peer for timeout
-		hash_map4_t::iterator i = m_last_purge++;
-		if (i->second.last_announce < now - seconds(interval + interval / 2))
-			erase_peer(i);
+		hash_map4_t::iterator it = m_last_purge++;
+		if (it->second.last_announce < now - seconds(interval + interval / 2))
+			erase_peer(it);
 	}
 }
 

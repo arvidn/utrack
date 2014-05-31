@@ -34,7 +34,7 @@ struct incoming_packet_t
 
 struct packet_socket
 {
-	packet_socket(bool receive = false);
+	explicit packet_socket(bool receive = false);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
 	packet_socket(packet_socket const&) = delete;

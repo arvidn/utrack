@@ -17,6 +17,8 @@ Copyright (C) 2013  Arvid Norberg
 */
 
 #include "socket.hpp"
+#include "config.hpp"
+
 #include <stdio.h> // for stderr
 #include <errno.h> // for errno
 #include <string.h> // for strerror
@@ -46,7 +48,6 @@ packet_socket::packet_socket(bool receive)
 		exit(1);
 	}
 
-	extern int socket_buffer_size;
 	int opt = socket_buffer_size;
 	int r = setsockopt(m_socket, SOL_SOCKET, m_receive ? SO_RCVBUF : SO_SNDBUF, &opt, sizeof(opt));
 	if (r == -1)
@@ -163,7 +164,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 	// if there's no data available, try a few times in a row right away.
 	// if there's still no data after that, go to sleep waiting for more
-	int spincount = 10;
+	int spincount = receive_spin_count;
 
 	// this loop is primarily here to be able to restart
 	// in the event of EINTR and also in the case of no data
@@ -188,10 +189,30 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 				e.events = POLLIN;
 				e.revents = 0;
 
-				int r = poll(&e, 1, -1);
+				spincount = receive_spin_count;
+
+				int r = poll(&e, 1, 2000);
+				if (r == -1)
+				{
+					if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+						continue;
+					fprintf(stderr, "poll failed (%d): %s\n", err, strerror(err));
+					return -1;
+				}
+
+				if (r == 0)
+				{
+					// no events, see if the socket was closed
+					if (m_socket == -1) return -1;
+					continue;
+				}
 
 				if ((e.revents & POLLHUP) || (e.revents & POLLERR))
+				{
+					fprintf(stderr, "poll returned socket failure (%d): %s\n"
+						, err, strerror(err));
 					return -1;
+				}
 				continue;
 			}
 			fprintf(stderr, "recvfrom failed (%d): %s\n", err, strerror(err));

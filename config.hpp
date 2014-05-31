@@ -33,6 +33,21 @@ enum
 
 	// the number of seconds between announces (seconds)
 	default_interval = 1800,
+
+	// if this is true, we allow peers to set which IP
+	// they will announce as. This is off by default since
+	// it allows for spoofing
+#ifdef _DEBUG
+	allow_alternate_ip = 1,
+#else
+	allow_alternate_ip = 0,
+#endif
+
+	socket_buffer_size = 5 * 1024 * 1024,
+
+	// the number of times to read (without receiving any data) from the udp
+	// socket before going to sleep
+	receive_spin_count = 10
 };
 
 #endif

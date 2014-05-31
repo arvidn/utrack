@@ -38,20 +38,16 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <cstdlib> // for rand()
 
 #include "swarm.hpp"
-#include "messages.hpp"
 #include "endian.hpp"
 #include "announce_thread.hpp"
 #include "socket.hpp"
 #include "key_rotate.hpp"
+#include "receive_thread.hpp"
+#include "config.hpp"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
 #endif
-
-// if this is true, we allow peers to set which IP
-// they will announce as. This is off by default since
-// it allows for spoofing
-bool allow_alternate_ip = false;
 
 int interval = default_interval;
 
@@ -74,182 +70,6 @@ std::atomic<uint32_t> bytes_in = ATOMIC_VAR_INIT(0);
 // the number of dropped announce requests, because we couldn't keep up
 std::atomic<uint32_t> dropped = ATOMIC_VAR_INIT(0);
 
-extern "C" int  siphash( unsigned char *out, const unsigned char *in
-	, unsigned long long inlen, const unsigned char *k);
-
-std::uint64_t gen_secret_digest(sockaddr_in const* from
-	, std::array<std::uint8_t, 16> const& key)
-{
-	std::array<std::uint8_t, sizeof(from->sin_addr) + sizeof(from->sin_port)> ep;
-	memcpy(ep.data(), (char*)&from->sin_addr, sizeof(from->sin_addr));
-	memcpy(ep.data() + sizeof(from->sin_addr), (char*)&from->sin_port
-		, sizeof(from->sin_port));
-
-	std::uint64_t ret;
-	siphash((std::uint8_t*)&ret, ep.data(), ep.size(), key.data());
-	return ret;
-}
-
-uint64_t generate_connection_id(sockaddr_in const* from)
-{
-	return gen_secret_digest(from, keys.cur_key());
-}
-
-bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
-{
-	return conn_id == gen_secret_digest(from, keys.cur_key())
-		|| conn_id == gen_secret_digest(from, keys.prev_key());
-}
-
-void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
-	, send_socket& sock, std::vector<announce_thread*>& announce_threads);
-
-// this thread receives incoming announces, parses them and posts
-// the announce to the correct announce thread, that then takes over
-// and is responsible for responding
-void receive_thread(std::vector<announce_thread*>& announce_threads, send_socket& ss)
-{
-	sigset_t sig;
-	sigfillset(&sig);
-	int r = pthread_sigmask(SIG_BLOCK, &sig, NULL);
-	if (r == -1)
-	{
-		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
-	}
-
-	// this is the sock this thread will use to send responses on
-	// to mitigate congestion on the receive socket
-	// TODO: somehow make this accessible from the outside, in order to terminate the thread by closing the socket
-	packet_socket sock(true);
-
-	incoming_packet_t pkts[512];
-
-	for (;;)
-	{
-		int recvd = sock.receive(pkts, sizeof(pkts)/sizeof(pkts[0]));
-		if (recvd <= 0) break;
-		for (int i = 0; i < recvd; ++i)
-			incoming_packet(pkts[i].buffer, pkts[i].buflen, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen
-				, ss, announce_threads);
-	}
-}
-
-void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
-	, send_socket& sock, std::vector<announce_thread*>& announce_threads)
-{
-	bytes_in += size;
-
-//	printf("received message from: %x port: %d size: %d\n"
-//		, from->sin_addr.s_addr, ntohs(from->sin_port), size);
-
-	if (size < 16)
-	{
-		printf("packet too short (%d)\n", size);
-		// log incorrect packet
-		return;
-	}
-
-	udp_announce_message* hdr = (udp_announce_message*)buf;
-
-	switch (ntohl(hdr->action))
-	{
-		case action_connect:
-		{
-			if (be64toh(hdr->connection_id) != 0x41727101980LL)
-			{
-				++errors;
-				printf("invalid connection ID for connect message\n");
-				// log error
-				return;
-			}
-			udp_connect_response resp;
-			resp.action = htonl(action_connect);
-			resp.connection_id = generate_connection_id(from);
-			resp.transaction_id = hdr->transaction_id;
-			++connects;
-			iovec iov = { &resp, 16};
-			if (sock.send(&iov, 1, (sockaddr*)from, fromlen))
-				return;
-			break;
-		}
-		case action_announce:
-		{
-			if (!verify_connection_id(hdr->connection_id, from))
-			{
-				printf("invalid connection ID\n");
-				++errors;
-				// log error
-				return;
-			}
-			// technically the announce message should
-			// be 100 bytes, but uTorrent doesn't seem to send
-			// the extension field at the end
-			if (size < 98)
-			{
-				printf("announce packet too short. Expected 100, got %d\n", size);
-				++errors;
-				// log incorrect packet
-				return;
-			}
-
-			if (!allow_alternate_ip || hdr->ip == 0)
-				hdr->ip = from->sin_addr.s_addr;
-
-			// post the announce to the thread that's responsible
-			// for this info-hash
-			announce_msg m;
-			m.bits.announce = *hdr;
-			m.from = *from;
-			m.fromlen = fromlen;
-
-			// use siphash here to prevent hash collision attacks causing one
-			// thread to overload
-			int thread_selector = siphash_fun()(hdr->hash) % announce_threads.size();
-			announce_threads[thread_selector]->post_announce(m);
-
-			break;
-		}
-		case action_scrape:
-		{
-			if (!verify_connection_id(hdr->connection_id, from))
-			{
-				printf("invalid connection ID for connect message\n");
-				++errors;
-				// log error
-				return;
-			}
-			if (size < 16 + 20)
-			{
-				printf("scrape packet too short. Expected 36, got %d\n", size);
-				++errors;
-				// log error
-				return;
-			}
-
-			udp_scrape_message* req = (udp_scrape_message*)buf;
-
-			// for now, just support scrapes for a single hash at a time
-			// to avoid having to bounce the request around all the threads
-			// befor accruing all the stats
-
-			// post the announce to the thread that's responsible
-			// for this info-hash
-			announce_msg m;
-			m.bits.scrape = *req;
-			m.from = *from;
-			m.fromlen = fromlen;
-			int thread_selector = req->hash[0].val[0] % announce_threads.size();
-			announce_threads[thread_selector]->post_announce(m);
-
-			break;
-		}
-		default:
-			printf("unknown action %d\n", ntohl(hdr->action));
-			++errors;
-			break;
-	}
-}
-
 void sigint(int s)
 {
 	quit = true;
@@ -257,13 +77,10 @@ void sigint(int s)
 
 int main(int argc, char* argv[])
 {
-	// TODO: TEMP!
-	allow_alternate_ip = true;
-
 	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	
 	std::vector<announce_thread*> announce_threads;
-	std::vector<std::thread> receive_threads;
+	std::vector<receive_thread*> receive_threads;
 	std::vector<packet_socket> send_sockets;
 
 	int num_cores = std::thread::hardware_concurrency();
@@ -310,7 +127,7 @@ int main(int argc, char* argv[])
 	printf("starting %d receive threads\n", num_cores);
 	for (int i = 0; i < num_cores; ++i)
 	{
-		receive_threads.emplace_back(receive_thread, std::ref(announce_threads), std::ref(ss));
+		receive_threads.push_back(new receive_thread(ss, announce_threads));
 #if defined __linux__
 		std::thread::native_handle_type h = receive_threads.back().native_handle();
 		CPU_CLEAR(cpu);
@@ -339,14 +156,14 @@ int main(int argc, char* argv[])
 		keys.tick();
 	}
 
-	for (std::thread& i : receive_threads)
-		i.join();
+	for (receive_thread* i : receive_threads)
+		i->close();
+
+	for (receive_thread* i : receive_threads)
+		delete i;
 
 	for (announce_thread* i : announce_threads)
-	{
 		delete i;
-	}
-	announce_threads.clear();
 
 	return EXIT_SUCCESS;
 }
