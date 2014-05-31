@@ -29,18 +29,12 @@ Copyright (C) 2010-201$  Arvid Norberg
 #include "socket.hpp"
 
 struct announce_thread;
-struct send_socket;
 
 // this is a thread that reads packets off the UDP socket and forwards it to
 // to appropriate announce_thread (if it's an announce)
 struct receive_thread
 {
-	receive_thread(send_socket& ss, std::vector<announce_thread*> const& at)
-		: m_sock(true)
-		, m_send_sock(ss)
-		, m_announce_threads(at)
-		, m_thread( [=]() { thread_fun(); } ) {}
-
+	receive_thread(std::vector<announce_thread*> const& at);
 	~receive_thread();
 
 	// allow move
@@ -66,7 +60,7 @@ struct receive_thread
 private:
 
 	packet_socket m_sock;
-	send_socket& m_send_sock;
+	packet_socket m_send_sock;
 	std::vector<announce_thread*> const& m_announce_threads;
 
 	std::thread m_thread;

@@ -57,6 +57,23 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 		|| conn_id == gen_secret_digest(from, keys.prev_key());
 }
 
+receive_thread::receive_thread(std::vector<announce_thread*> const& at)
+	: m_sock(true)
+	, m_send_sock()
+	, m_announce_threads(at)
+	, m_thread( [=]() { thread_fun(); } ) {}
+
+receive_thread::~receive_thread()
+{
+	m_sock.close();
+	m_thread.join();
+}
+
+void receive_thread::close()
+{
+	m_sock.close();
+}
+
 void receive_thread::thread_fun()
 {
 	sigset_t sig;
@@ -196,16 +213,5 @@ void receive_thread::incoming_packet(char const* buf, int size
 			++errors;
 			break;
 	}
-}
-
-void receive_thread::close()
-{
-	m_sock.close();
-}
-
-receive_thread::~receive_thread()
-{
-	m_sock.close();
-	m_thread.join();
 }
 

@@ -73,6 +73,8 @@ packet_socket::packet_socket(bool receive)
 
 	extern int listen_port;
 
+	// we cannot bind the sockets meant for just outgoing packets to the
+	// IP and port, since then they will swallow incoming packets
 	if (m_receive)
 	{
 		sockaddr_in bind_addr;

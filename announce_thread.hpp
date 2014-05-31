@@ -21,6 +21,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 
 #include "messages.hpp"
 #include "swarm.hpp"
+#include "socket.hpp"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -41,8 +42,6 @@ struct announce_msg
 	sockaddr_in from;
 	socklen_t fromlen;
 };
-
-struct send_socket;
 
 extern "C" int siphash(unsigned char *out, const unsigned char *in
 	, unsigned long long inlen, const unsigned char *k);
@@ -69,7 +68,7 @@ struct siphash_fun
 // UDP socket
 struct announce_thread
 {
-	announce_thread(send_socket& ss);
+	announce_thread();
 
 	// allow move
 	announce_thread(announce_thread&&) = default;
@@ -101,7 +100,8 @@ private:
 	typedef std::unordered_map<sha1_hash, swarm, siphash_fun> swarm_map_t;
 	swarm_map_t m_swarms;
 
-	send_socket& m_sock;
+	// socket used to send responses to
+	packet_socket m_sock;
 
 	bool m_quit;
 	std::thread m_thread;

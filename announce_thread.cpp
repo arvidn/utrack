@@ -49,8 +49,8 @@ std::array<uint8_t, 16> gen_random_key()
 	return ret;
 }
 
-announce_thread::announce_thread(send_socket& ss)
-	: m_sock(ss)
+announce_thread::announce_thread()
+	: m_sock()
 	, m_quit(false)
 	, m_thread( [=]() { thread_fun(); } )
 {
