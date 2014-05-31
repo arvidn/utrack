@@ -47,7 +47,8 @@ struct packet_socket
 	int receive(incoming_packet_t* in_packets, int num);
 private:
 	int m_socket;
-	// this buffer is aligned
+	// this buffer needs to be aligned, because we
+	// overlay structs to parse out packets
 	uint64_t m_buffer[1500/8];
 	bool m_receive;
 };

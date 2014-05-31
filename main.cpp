@@ -120,6 +120,7 @@ void receive_thread(std::vector<announce_thread*>& announce_threads, send_socket
 
 	// this is the sock this thread will use to send responses on
 	// to mitigate congestion on the receive socket
+	// TODO: somehow make this accessible from the outside, in order to terminate the thread by closing the socket
 	packet_socket sock(true);
 
 	incoming_packet_t pkts[512];

@@ -22,6 +22,8 @@ Copyright (C) 2013  Arvid Norberg
 #include <string.h> // for strerror
 #include <stdlib.h> // for exit
 #include <unistd.h> // for close
+#include <poll.h> // for poll
+#include <fcntl.h> // for F_GETFL and F_SETFL
 
 #include <atomic>
 #include <assert.h>
@@ -84,6 +86,22 @@ packet_socket::packet_socket(bool receive)
 				, listen_port, errno, strerror(errno));
 			exit(1);
 		}
+
+		int flags = fcntl(m_socket, F_GETFL, 0);
+		if (flags < 0)
+		{
+			fprintf(stderr, "failed to get file flags (%d): %s\n"
+				, errno, strerror(errno));
+			exit(1);
+		}
+		flags |= O_NONBLOCK;
+		r = fcntl(m_socket, F_SETFL, flags);
+		if (r < 0)
+		{
+			fprintf(stderr, "failed to set file flags (%d): %s\n"
+				, errno, strerror(errno));
+			exit(1);
+		}
 	}
 }
 
@@ -107,6 +125,8 @@ packet_socket::packet_socket(packet_socket&& s)
 // send a packet and retry on EINTR
 bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
 {
+	assert(!m_receive);
+
 	msghdr msg;
 	msg.msg_name = (void*)to;
 	msg.msg_namelen = tolen;
@@ -116,7 +136,7 @@ bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t 
 	msg.msg_controllen = 0;
 	msg.msg_flags = 0;
 
-	// silly loop just to deal with the potential EINTR
+	// loop just to deal with the potential EINTR
 	do
 	{
 		int r = sendmsg(m_socket, &msg, MSG_NOSIGNAL);
@@ -131,6 +151,8 @@ bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t 
 	return 0;
 }
 
+// This interface supports returning multiple buffers just to prepare
+// for maybe using something more efficient than recvfrom() one dat
 int packet_socket::receive(incoming_packet_t* in_packets, int num)
 {
 	assert(m_receive);
@@ -139,25 +161,50 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	sockaddr_in from;
 	socklen_t fromlen = sizeof(from);
 
-	// TODO;: it could be faster to drain the UDP socket in a loop here, since the kernel code path is hot in the cache
-	int size;
-	do
+	// if there's no data available, try a few times in a row right away.
+	// if there's still no data after that, go to sleep waiting for more
+	int spincount = 10;
+
+	// this loop is primarily here to be able to restart
+	// in the event of EINTR and also in the case of no data
+	// being available immediately (in which case we block in poll)
+	while (true)
 	{
 		fromlen = sizeof(from);
-		size = recvfrom(m_socket, (char*)m_buffer, sizeof(m_buffer), 0
+		int size = recvfrom(m_socket, (char*)m_buffer, sizeof(m_buffer), 0
 			, (sockaddr*)&from, &fromlen);
 		if (size == -1)
 		{
-			if (errno == EINTR) continue;
-			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
+			int err = errno;
+			if (err == EINTR) continue;
+			if (err == EAGAIN || errno == EWOULDBLOCK)
+			{
+				--spincount;
+				if (spincount > 0) continue;
+				// the first read came back empty, wait for new data
+				// on the socket and try again
+				pollfd e;
+				e.fd = m_socket;
+				e.events = POLLIN;
+				e.revents = 0;
+
+				int r = poll(&e, 1, -1);
+
+				if ((e.revents & POLLHUP) || (e.revents & POLLERR))
+					return -1;
+				continue;
+			}
+			fprintf(stderr, "recvfrom failed (%d): %s\n", err, strerror(err));
 			return -1;
 		}
-	} while (false);
 
-	memcpy(&in_packets[0].from, &from, sizeof(from));
-	in_packets[0].fromlen = fromlen;
-	in_packets[0].buffer = (char*)m_buffer;
-	in_packets[0].buflen = size;
+		memcpy(&in_packets->from, &from, sizeof(from));
+		in_packets->fromlen = fromlen;
+		in_packets->buffer = (char*)m_buffer;
+		in_packets->buflen = size;
+		break;
+	}
+
 	return 1;
 }
 
