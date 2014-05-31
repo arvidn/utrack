@@ -42,6 +42,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include "endian.hpp"
 #include "announce_thread.hpp"
 #include "socket.hpp"
+#include "key_rotate.hpp"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -61,10 +62,8 @@ int socket_buffer_size = 5 * 1024 * 1024;
 // set to true when we're shutting down
 volatile bool quit = false;
 
-// partial SHA-1 hash of the secret key, combined with
-// source IP and port it forms the connection-id
-// TODO: use something more efficient than SHA-1
-SHA_CTX secret;
+// the secret keys used for syn-cookies
+key_rotate keys;
 
 // stats counters
 std::atomic<uint32_t> connects = ATOMIC_VAR_INIT(0);
@@ -77,29 +76,30 @@ std::atomic<uint32_t> bytes_in = ATOMIC_VAR_INIT(0);
 // the number of dropped announce requests, because we couldn't keep up
 std::atomic<uint32_t> dropped = ATOMIC_VAR_INIT(0);
 
-void gen_secret_digest(sockaddr_in const* from, char* digest)
+extern "C" int  siphash( unsigned char *out, const unsigned char *in
+	, unsigned long long inlen, const unsigned char *k);
+
+std::uint64_t gen_secret_digest(sockaddr_in const* from
+	, std::array<std::uint8_t, 16> const& key)
 {
-	SHA_CTX ctx = secret;
-	SHA1_Update(&ctx, (char*)&from->sin_addr, sizeof(from->sin_addr));
-	SHA1_Update(&ctx, (char*)&from->sin_port, sizeof(from->sin_port));
-	SHA1_Final((unsigned char*)digest, &ctx);
+	std::array<std::uint8_t, sizeof(from->sin_addr) + sizeof(from->sin_port)> ep;
+	memcpy(ep.data(), (char*)&from->sin_addr, sizeof(from->sin_addr));
+	memcpy(ep.data() + sizeof(from->sin_addr), (char*)&from->sin_port, sizeof(from->sin_port));
+
+	std::uint64_t ret;
+	siphash((std::uint8_t*)&ret, ep.data(), ep.size(), key.data());
+	return ret;
 }
 
 uint64_t generate_connection_id(sockaddr_in const* from)
 {
-//TODO: add an option to use a less secure, cheap method
-	char digest[20];
-	gen_secret_digest(from, digest);
-	uint64_t ret;
-	memcpy((char*)&ret, digest, sizeof(ret));
-	return ret;
+	return gen_secret_digest(from, keys.cur_key());
 }
 
 bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 {
-	char digest[20];
-	gen_secret_digest(from, digest);
-	return memcmp((char*)&conn_id, digest, sizeof(conn_id)) == 0;
+	return conn_id == gen_secret_digest(from, keys.cur_key())
+		|| conn_id == gen_secret_digest(from, keys.prev_key());
 }
 
 void incoming_packet(char const* buf, int size, sockaddr_in const* from, socklen_t fromlen
@@ -257,17 +257,6 @@ int main(int argc, char* argv[])
 {
 	// TODO: TEMP!
 	allow_alternate_ip = true;
-
-	// initialize secret key which the connection-ids are built off of
-	uint64_t secret_key = 0;
-	for (int i = 0; i < sizeof(secret_key); ++i)
-	{
-		secret_key <<= 8;
-		// TODO: use a c++11 random function instead
-		secret_key ^= std::rand();
-	}
-	SHA1_Init(&secret);
-	SHA1_Update(&secret, &secret_key, sizeof(secret_key));
 
 	fprintf(stderr, "listening on UDP port %d\n", listen_port);
 	

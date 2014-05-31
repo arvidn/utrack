@@ -1,0 +1,5 @@
+exe utrack : main.cpp swarm.cpp swarm.hpp messages.hpp announce_thread.cpp
+	announce_thread.hpp socket.hpp socket.cpp siphash24.c key_rotate.cpp ;
+
+exe udp_test : test_announce.cpp ;
+
