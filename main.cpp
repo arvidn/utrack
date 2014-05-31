@@ -334,6 +334,7 @@ int main(int argc, char* argv[])
 		printf("c: %u a: %u s: %u e: %u d: %u in: %u kB out: %u kB\n"
 			, last_connects / 10, last_announces / 10, last_scrapes / 10, last_errors / 10
 			, last_dropped / 10, last_bytes_in / 1000, last_bytes_out / 1000);
+		keys.tick();
 	}
 
 	for (std::thread& i : receive_threads)
