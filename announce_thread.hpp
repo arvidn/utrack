@@ -29,6 +29,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <queue>
 #include <unordered_map>
 #include <array>
+#include <vector>
 
 struct announce_msg
 {
@@ -68,10 +69,7 @@ struct siphash_fun
 // UDP socket
 struct announce_thread
 {
-	announce_thread(send_socket& ss)
-		: m_sock(ss)
-		, m_quit(false)
-		, m_thread( [=]() { thread_fun(); } ) {}
+	announce_thread(send_socket& ss);
 
 	// allow move
 	announce_thread(announce_thread&&) = default;
@@ -92,7 +90,11 @@ private:
 	// job queue
 	std::mutex m_mutex;
 	std::condition_variable m_cond;
-	std::deque<announce_msg> m_queue;
+	// this is the queue new jobs are posted to
+	std::vector<announce_msg> m_queue;
+	// this is the queue the other one is swapped into
+	// and then drained without needing to hold the mutex
+	std::vector<announce_msg> m_internal_queue;
 
 	// the swarm hash table. Each thread has its own hash table of swarms.
 	// swarms are pinned to certain threads based on their info-hash

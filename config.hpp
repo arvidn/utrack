@@ -47,7 +47,10 @@ enum
 
 	// the number of times to read (without receiving any data) from the udp
 	// socket before going to sleep
-	receive_spin_count = 10
+	receive_spin_count = 10,
+
+	// the max number of announce requests to queue up per announce_thread
+	announce_queue_size = 8192,
 };
 
 #endif

@@ -18,6 +18,8 @@ Copyright (C) 2010-2013  Arvid Norberg
 
 #include "announce_thread.hpp"
 #include "socket.hpp"
+#include "config.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <random>
@@ -47,6 +49,13 @@ std::array<uint8_t, 16> gen_random_key()
 	return ret;
 }
 
+announce_thread::announce_thread(send_socket& ss)
+	: m_sock(ss)
+	, m_quit(false)
+	, m_thread( [=]() { thread_fun(); } )
+{
+}
+
 void announce_thread::thread_fun()
 {
 	sigset_t sig;
@@ -56,6 +65,9 @@ void announce_thread::thread_fun()
 	{
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
+
+	m_queue.reserve(announce_queue_size);
+	m_internal_queue.reserve(announce_queue_size);
 
 	steady_clock::time_point now = steady_clock::now();
 	steady_clock::time_point next_prune = now + seconds(10);
@@ -71,8 +83,7 @@ void announce_thread::thread_fun()
 			m_cond.wait(l);
 
 		if (m_quit) break;
-		std::deque<announce_msg> q;
-		m_queue.swap(q);
+		m_queue.swap(m_internal_queue);
 		l.unlock();
 
 		now = steady_clock::now();
@@ -100,7 +111,7 @@ void announce_thread::thread_fun()
 			}
 		}
 
-		for (announce_msg const& m : q)
+		for (announce_msg const& m : m_internal_queue)
 		{
 			switch (ntohl(m.bits.announce.action))
 			{
@@ -163,6 +174,7 @@ void announce_thread::thread_fun()
 				}
 			}
 		}
+		m_internal_queue.clear();
 	}
 }
 
@@ -172,7 +184,7 @@ void announce_thread::post_announce(announce_msg const& m)
 
 	// have some upper limit here, to avoid
 	// allocating memory indefinitely
-	if (m_queue.size() >= 5000)
+	if (m_queue.size() >= announce_queue_size)
 	{
 		++dropped;
 		return;
