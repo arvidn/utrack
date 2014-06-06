@@ -49,12 +49,21 @@ std::array<uint8_t, 16> gen_random_key()
 	return ret;
 }
 
+#ifdef USE_PCAP
+announce_thread::announce_thread(packet_socket& s)
+	: m_sock(s)
+	, m_quit(false)
+	, m_thread( [=]() { thread_fun(); } )
+{
+}
+#else
 announce_thread::announce_thread()
 	: m_sock()
 	, m_quit(false)
 	, m_thread( [=]() { thread_fun(); } )
 {
 }
+#endif
 
 void announce_thread::thread_fun()
 {
@@ -144,7 +153,7 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					if (m_sock.send(iov, 2, (sockaddr*)&m.from, m.fromlen))
+					if (!m_sock.send(iov, 2, (sockaddr*)&m.from, m.fromlen))
 						return;
 					break;
 				}
@@ -167,7 +176,7 @@ void announce_thread::thread_fun()
 					}
 
 					iovec iov = { &resp, 8 + 12};
-					if (m_sock.send(&iov, 1, (sockaddr*)&m.from, m.fromlen))
+					if (!m_sock.send(&iov, 1, (sockaddr*)&m.from, m.fromlen))
 						return;
 
 					break;

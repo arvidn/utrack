@@ -1,12 +1,28 @@
+import feature : feature ;
+
 install stage-test : udp_test : <location>. ;
 install stage : utrack : <location>. ;
 
 explicit stage-test ;
 explicit stage ;
 
-exe utrack : main.cpp swarm.cpp swarm.hpp messages.hpp announce_thread.cpp
-	announce_thread.hpp socket.hpp socket.cpp siphash24.c key_rotate.cpp
-	receive_thread.cpp ;
+feature libpcap : off on : composite propagated link-incompatible ;
+
+lib pcap : : <name>pcap : <search>/opt/local/lib : <include>/opt/local/include <define>USE_PCAP ;
+
+exe utrack
+	:
+	main.cpp
+	swarm.cpp
+	announce_thread.cpp
+	siphash24.c
+	key_rotate.cpp
+	receive_thread.cpp
+	:
+	<libpcap>on:<library>pcap
+	<libpcap>on:<source>socket_pcap.cpp
+	<libpcap>off:<source>socket_system.cpp
+	;
 
 exe udp_test : test_announce.cpp ;
 

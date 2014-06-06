@@ -34,7 +34,11 @@ struct announce_thread;
 // to appropriate announce_thread (if it's an announce)
 struct receive_thread
 {
+#ifdef USE_PCAP
+	receive_thread(packet_socket& s, std::vector<announce_thread*> const& at);
+#else
 	receive_thread(std::vector<announce_thread*> const& at);
+#endif
 	~receive_thread();
 
 	// allow move
@@ -59,8 +63,12 @@ struct receive_thread
 
 private:
 
+#ifdef USE_PCAP
+	packet_socket& m_sock;
+#else
 	packet_socket m_sock;
 	packet_socket m_send_sock;
+#endif
 	std::vector<announce_thread*> const& m_announce_threads;
 
 	std::thread m_thread;

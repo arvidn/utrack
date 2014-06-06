@@ -57,11 +57,22 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 		|| conn_id == gen_secret_digest(from, keys.prev_key());
 }
 
+#ifdef USE_PCAP
+receive_thread::receive_thread(packet_socket& s
+	, std::vector<announce_thread*> const& at)
+	: m_sock(s)
+	, m_announce_threads(at)
+	, m_thread( [=]() { thread_fun(); } ) {}
+
+#else
+
 receive_thread::receive_thread(std::vector<announce_thread*> const& at)
 	: m_sock(true)
 	, m_send_sock()
 	, m_announce_threads(at)
 	, m_thread( [=]() { thread_fun(); } ) {}
+
+#endif
 
 receive_thread::~receive_thread()
 {
@@ -84,7 +95,7 @@ void receive_thread::thread_fun()
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 
-	incoming_packet_t pkts[512];
+	incoming_packet_t pkts[1024];
 
 	for (;;)
 	{
@@ -133,8 +144,13 @@ void receive_thread::incoming_packet(char const* buf, int size
 			resp.transaction_id = hdr->transaction_id;
 			++connects;
 			iovec iov = { &resp, 16};
+#ifdef USE_PCAP
+			if (m_sock.send(&iov, 1, (sockaddr*)from, fromlen))
+				return;
+#else
 			if (m_send_sock.send(&iov, 1, (sockaddr*)from, fromlen))
 				return;
+#endif
 			break;
 		}
 		case action_announce:

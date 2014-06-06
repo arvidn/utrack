@@ -1,6 +1,6 @@
 /*
 utrack is a very small an efficient BitTorrent tracker
-Copyright (C) 2013  Arvid Norberg
+Copyright (C) 2013-2014 Arvid Norberg
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -35,6 +35,7 @@ Copyright (C) 2013  Arvid Norberg
 #endif
 
 extern std::atomic<uint32_t> bytes_out;
+
 
 packet_socket::packet_socket(bool receive)
 	: m_socket(-1)
@@ -147,11 +148,11 @@ bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t 
 		{
 			if (errno == EINTR) continue;
 			fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
-			return 1;
+			return false;
 		}
 		bytes_out += r;
 	} while (false);
-	return 0;
+	return true;
 }
 
 // This interface supports returning multiple buffers just to prepare
@@ -174,7 +175,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	while (true)
 	{
 		fromlen = sizeof(from);
-		int size = recvfrom(m_socket, (char*)m_buffer, sizeof(m_buffer), 0
+		int size = recvfrom(m_socket, (char*)m_buffer.data(), m_buffer.size()*8, 0
 			, (sockaddr*)&from, &fromlen);
 		if (size == -1)
 		{
@@ -223,7 +224,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 		memcpy(&in_packets->from, &from, sizeof(from));
 		in_packets->fromlen = fromlen;
-		in_packets->buffer = (char*)m_buffer;
+		in_packets->buffer = (char*)m_buffer.data();
 		in_packets->buflen = size;
 		break;
 	}

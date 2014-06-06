@@ -68,7 +68,11 @@ struct siphash_fun
 // UDP socket
 struct announce_thread
 {
+#ifdef USE_PCAP
+	announce_thread(packet_socket& s);
+#else
 	announce_thread();
+#endif
 
 	// allow move
 	announce_thread(announce_thread&&) = default;
@@ -100,8 +104,12 @@ private:
 	typedef std::unordered_map<sha1_hash, swarm, siphash_fun> swarm_map_t;
 	swarm_map_t m_swarms;
 
+#ifdef USE_PCAP
+	packet_socket& m_sock;
+#else
 	// socket used to send responses to
 	packet_socket m_sock;
+#endif
 
 	bool m_quit;
 	std::thread m_thread;

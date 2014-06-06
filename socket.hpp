@@ -1,6 +1,6 @@
 /*
 utrack is a very small an efficient BitTorrent tracker
-Copyright (C) 2013  Arvid Norberg
+Copyright (C) 2013-2014 Arvid Norberg
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -22,7 +22,11 @@ Copyright (C) 2013  Arvid Norberg
 #include <cstdint>
 #include <atomic>
 #include <vector>
+#include <array>
+#include <mutex>
+
 #include <netinet/in.h> // for sockaddr
+#include <sys/socket.h> // for iovec
 
 struct incoming_packet_t
 {
@@ -32,26 +36,11 @@ struct incoming_packet_t
 	int buflen;
 };
 
-struct packet_socket
-{
-	explicit packet_socket(bool receive = false);
-	~packet_socket();
-	packet_socket(packet_socket&& s);
-	packet_socket(packet_socket const&) = delete;
-
-	void close();
-
-	bool send(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
-
-	// fills in the in_packets array with incoming packets. Returns the number filled in
-	int receive(incoming_packet_t* in_packets, int num);
-private:
-	int m_socket;
-	// this buffer needs to be aligned, because we
-	// overlay structs to parse out packets
-	uint64_t m_buffer[1500/8];
-	bool m_receive;
-};
+#ifdef USE_PCAP
+#include "socket_pcap.hpp"
+#else
+#include "socket_system.hpp"
+#endif
 
 #endif // _PACKET_SOCKET_HPP_
 
