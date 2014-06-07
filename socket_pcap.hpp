@@ -18,6 +18,9 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 #include <pcap/pcap.h>
 #include <array>
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 enum { buffer_size = 16384 };
 
@@ -37,7 +40,7 @@ struct packet_socket
 
 private:
 
-	void drain_send_queue();
+	void send_thread();
 
 	pcap_t* m_pcap;
 	int m_link_layer;
@@ -62,5 +65,8 @@ private:
 	// the other buffer is used internally by the thread that's actually
 	// sending the packets
 	int m_buffer_idx;
+
+	// the thread that's used to send the packets put in the send queue
+	std::thread m_send_thread;
 };
 

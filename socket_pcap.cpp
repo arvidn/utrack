@@ -31,6 +31,9 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <netinet/in.h> // for sockaddr
 
 #include <atomic>
+#include <mutex>
+#include <chrono>
+#include <thread>
 
 #include <pcap/pcap.h>
 
@@ -45,6 +48,7 @@ packet_socket::packet_socket(bool receive)
 	, m_closed(ATOMIC_VAR_INIT(0))
 	, m_send_cursor(0)
 	, m_buffer_idx(0)
+	, m_send_thread(&packet_socket::send_thread, this)
 {
 	char error_msg[PCAP_ERRBUF_SIZE];
 	m_pcap = pcap_create("lo0", error_msg);
@@ -101,6 +105,7 @@ packet_socket::packet_socket(bool receive)
 packet_socket::~packet_socket()
 {
 	close();
+	m_send_thread.join();
 	if (m_pcap)
 		pcap_close(m_pcap);
 }
@@ -329,39 +334,56 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	++st->current;
 }
 
-void packet_socket::drain_send_queue()
+void packet_socket::send_thread()
 {
-	std::array<std::uint8_t, 0x100000> const* buf;
-	int end;
-
+	bool sleep = false;
+	while (!m_closed)
 	{
-		std::lock_guard<std::mutex> l(m_mutex);
-		if (m_send_cursor == 0) return;
+		std::array<std::uint8_t, 0x100000> const* buf;
+		int end;
 
-		buf = &m_send_buffer[m_buffer_idx];
+		if (sleep)
+		{
+			// we did not see any packets in the buffer last cycle
+			// through. sleep for a while to see if there are any in
+			// a little bit
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			sleep = false;
+		}
 
-		// flip to use the other buffer to put outgoing packets in
-		m_buffer_idx = (m_buffer_idx + 1) & 1;
-		end = m_send_cursor;
-		m_send_cursor = 0;
-	}
+		{
+			std::lock_guard<std::mutex> l(m_mutex);
+			if (m_send_cursor == 0)
+			{
+				sleep = true;
+				continue;
+			}
 
-	for (int i = 0; i < end;)
-	{
-		int len = ((*buf)[i] << 8) | (*buf)[i+1];
-		assert(len <= 1500);
-		assert(len > 0);
-		i += 2;
-		assert(buf->size() - i >= len);
+			buf = &m_send_buffer[m_buffer_idx];
 
-		int r = pcap_sendpacket(m_pcap, buf->data() + i
-			, len);
+			// flip to use the other buffer to put outgoing packets in
+			m_buffer_idx = (m_buffer_idx + 1) & 1;
+			end = m_send_cursor;
+			m_send_cursor = 0;
+		}
 
-		if (r == -1)
-			fprintf(stderr, "pcap_sendpacket() = %d \"%s\"\n", r
-				, pcap_geterr(m_pcap));
+		for (int i = 0; i < end;)
+		{
+			int len = ((*buf)[i] << 8) | (*buf)[i+1];
+			assert(len <= 1500);
+			assert(len > 0);
+			i += 2;
+			assert(buf->size() - i >= len);
 
-		i += len;
+			int r = pcap_sendpacket(m_pcap, buf->data() + i
+				, len);
+
+			if (r == -1)
+				fprintf(stderr, "pcap_sendpacket() = %d \"%s\"\n", r
+					, pcap_geterr(m_pcap));
+
+			i += len;
+		}
 	}
 }
 
@@ -388,8 +410,6 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 	bool reset_timeout = false;
 
-	drain_send_queue();
-
 	while (true)
 	{
 		if (m_closed) return -1;
@@ -401,8 +421,6 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 			if (r == -3) exit(2);
 			return -1;
 		}
-
-		drain_send_queue();
 
 		if (st.current != 0) return st.current;
 
