@@ -49,8 +49,18 @@ private:
 
 	// this contains all packets we want to send as one contiguous array. Each
 	// packet has a 2 byte, host order length prefix, followed by that many
-	// bytes of payload
-	std::array<uint8_t, 0x100000> m_send_buffer;
+	// bytes of payload. This is double buffered. Other threads write to one
+	// buffer while the sending thread reads from the other. This lowers the
+	// lock contention while sending
+	std::array<uint8_t, 0x100000> m_send_buffer[2];
+
+	// the cursor of where new outgoing packets should be written in the
+	// send buffer
 	int m_send_cursor;
+
+	// the index of the send buffer to use for writing new outgoing packets.
+	// the other buffer is used internally by the thread that's actually
+	// sending the packets
+	int m_buffer_idx;
 };
 

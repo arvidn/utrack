@@ -44,6 +44,7 @@ packet_socket::packet_socket(bool receive)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
 	, m_send_cursor(0)
+	, m_buffer_idx(0)
 {
 	char error_msg[PCAP_ERRBUF_SIZE];
 	m_pcap = pcap_create("lo0", error_msg);
@@ -124,13 +125,13 @@ bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t 
 
 	std::lock_guard<std::mutex> l(m_mutex);
 
-	if (m_send_cursor + buf_size + 28 + 30 > m_send_buffer.size())
+	if (m_send_cursor + buf_size + 28 + 30 > m_send_buffer[m_buffer_idx].size())
 	{
 		fprintf(stderr, "send buffer full\n");
 		return false;
 	}
 
-	std::uint8_t* ptr = &m_send_buffer[m_send_cursor];
+	std::uint8_t* ptr = &m_send_buffer[m_buffer_idx][m_send_cursor];
 
 	std::uint8_t* prefix = ptr;
 	ptr += 2;
@@ -330,18 +331,30 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 
 void packet_socket::drain_send_queue()
 {
-	std::lock_guard<std::mutex> l(m_mutex);
-	if (m_send_cursor == 0) return;
+	std::array<std::uint8_t, 0x100000> const* buf;
+	int end;
 
-	for (int i = 0; i < m_send_cursor;)
 	{
-		int len = (m_send_buffer[i] << 8) | m_send_buffer[i+1];
+		std::lock_guard<std::mutex> l(m_mutex);
+		if (m_send_cursor == 0) return;
+
+		buf = &m_send_buffer[m_buffer_idx];
+
+		// flip to use the other buffer to put outgoing packets in
+		m_buffer_idx = (m_buffer_idx + 1) & 1;
+		end = m_send_cursor;
+		m_send_cursor = 0;
+	}
+
+	for (int i = 0; i < end;)
+	{
+		int len = ((*buf)[i] << 8) | (*buf)[i+1];
 		assert(len <= 1500);
 		assert(len > 0);
 		i += 2;
-		assert(m_send_buffer.size() - i >= len);
+		assert(buf->size() - i >= len);
 
-		int r = pcap_sendpacket(m_pcap, &m_send_buffer[i]
+		int r = pcap_sendpacket(m_pcap, buf->data() + i
 			, len);
 
 		if (r == -1)
@@ -350,7 +363,6 @@ void packet_socket::drain_send_queue()
 
 		i += len;
 	}
-	m_send_cursor = 0;
 }
 
 // fills in the in_packets array with incoming packets. Returns the number filled in
