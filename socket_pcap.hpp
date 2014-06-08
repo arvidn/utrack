@@ -80,6 +80,8 @@ private:
 	std::thread m_send_thread;
 };
 
+// TODO: WinPcap has a much more efficient bulk-sending API which would be
+// nice to use
 struct packet_buffer
 {
 	friend struct packet_socket;
