@@ -469,7 +469,6 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 		if (!reset_timeout)
 		{
-			fprintf(stderr, "dispatch returned 0 packets\n");
 			r = pcap_set_timeout(m_pcap, 100);
 			if (r == -1)
 				fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
