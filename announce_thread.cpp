@@ -55,6 +55,7 @@ announce_thread::announce_thread(packet_socket& s)
 	, m_quit(false)
 	, m_thread( [=]() { thread_fun(); } )
 {
+	m_queue.reserve(announce_queue_size);
 }
 #else
 announce_thread::announce_thread()
@@ -62,6 +63,7 @@ announce_thread::announce_thread()
 	, m_quit(false)
 	, m_thread( [=]() { thread_fun(); } )
 {
+	m_queue.reserve(announce_queue_size);
 }
 #endif
 
@@ -75,8 +77,10 @@ void announce_thread::thread_fun()
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 
-	m_queue.reserve(announce_queue_size);
-	m_internal_queue.reserve(announce_queue_size);
+	// this is the queue the other one is swapped into
+	// and then drained without needing to hold the mutex
+	std::vector<announce_msg> queue;
+	queue.reserve(announce_queue_size);
 
 	steady_clock::time_point now = steady_clock::now();
 	steady_clock::time_point next_prune = now + seconds(10);
@@ -95,7 +99,7 @@ void announce_thread::thread_fun()
 			m_cond.wait(l);
 
 		if (m_quit) break;
-		m_queue.swap(m_internal_queue);
+		m_queue.swap(queue);
 		l.unlock();
 
 		now = steady_clock::now();
@@ -123,7 +127,7 @@ void announce_thread::thread_fun()
 			}
 		}
 
-		for (announce_msg const& m : m_internal_queue)
+		for (announce_msg const& m : queue)
 		{
 			switch (ntohl(m.bits.announce.action))
 			{
@@ -186,28 +190,31 @@ void announce_thread::thread_fun()
 				}
 			}
 		}
-		m_internal_queue.clear();
+		queue.clear();
 		m_sock.send(send_buffer);
 	}
 }
 
-void announce_thread::post_announce(announce_msg const& m)
+void announce_thread::post_announces(std::vector<announce_msg> const& m)
 {
+	if (m.empty()) return;
+
 	std::unique_lock<std::mutex> l(m_mutex);
 
 	// have some upper limit here, to avoid
 	// allocating memory indefinitely
 	if (m_queue.size() >= announce_queue_size)
 	{
-		++dropped;
+		dropped += m.size();
 		return;
 	}
 
-	m_queue.push_back(m);
+	bool first_insert = m_queue.empty();
+	m_queue.insert(m_queue.begin(), m.begin(), m.end());
 
 	// don't send a signal if we don't need to
 	// it's expensive
-	if (m_queue.size() == 1)
+	if (first_insert)
 		m_cond.notify_one();
 }
 

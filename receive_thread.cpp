@@ -104,6 +104,8 @@ void receive_thread::thread_fun()
 	packet_buffer send_buffer(m_send_sock);
 #endif
 
+	std::vector<std::vector<announce_msg>> announce_buf(m_announce_threads.size());
+
 	incoming_packet_t pkts[1024];
 
 	for (;;)
@@ -113,22 +115,32 @@ void receive_thread::thread_fun()
 		for (int i = 0; i < recvd; ++i)
 			incoming_packet(pkts[i].buffer, pkts[i].buflen
 				, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen
-				, send_buffer);
+				, send_buffer, announce_buf.data());
 
 #ifdef USE_PCAP
 		m_sock.send(send_buffer);
 #else
 		m_send_sock.send(send_buffer);
 #endif
+
+		for (int i = 0; i < m_announce_threads.size(); ++i)
+		{
+			m_announce_threads[i]->post_announces(announce_buf[i]);
+			announce_buf[i].clear();
+		}
 	}
 }
 
 // this thread receives incoming announces, parses them and posts
 // the announce to the correct announce thread, that then takes over
-// and is responsible for responding
+// and is responsible for responding. The send_buffer is where outgoing
+// responses go, they will be comitted and sent off at a later time.
+// similarly, announce_buf is where announce messages for the announce
+// threads go. It's an array of announce_msg buffers, one entry per
+// announce thread.
 void receive_thread::incoming_packet(char const* buf, int size
 	, sockaddr_in const* from, socklen_t fromlen
-	, packet_buffer& send_buffer)
+	, packet_buffer& send_buffer, std::vector<announce_msg>* announce_buf)
 {
 	bytes_in += size;
 
@@ -198,7 +210,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 			// use siphash here to prevent hash collision attacks causing one
 			// thread to overload
 			int thread_selector = siphash_fun()(hdr->hash) % m_announce_threads.size();
-			m_announce_threads[thread_selector]->post_announce(m);
+			announce_buf[thread_selector].push_back(m);
 
 			break;
 		}
@@ -232,7 +244,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 			m.from = *from;
 			m.fromlen = fromlen;
 			int thread_selector = req->hash[0].val[0] % m_announce_threads.size();
-			m_announce_threads[thread_selector]->post_announce(m);
+			announce_buf[thread_selector].push_back(m);
 
 			break;
 		}
