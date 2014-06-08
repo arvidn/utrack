@@ -22,10 +22,20 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <mutex>
 #include <thread>
 
-enum { buffer_size = 16384 };
+enum {
+	// the receive buffer size for packets, specified in uint64_ts
+	receive_buffer_size = 16384,
+
+	// specified in bytes
+	send_buffer_size = 0x400000,
+};
+
+struct packet_buffer;
 
 struct packet_socket
 {
+	friend struct packet_buffer;
+
 	explicit packet_socket(bool receive = false);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
@@ -33,7 +43,7 @@ struct packet_socket
 
 	void close();
 
-	bool send(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
+	bool send(packet_buffer& packets);
 
 	// fills in the in_packets array with incoming packets. Returns the number filled in
 	int receive(incoming_packet_t* in_packets, int num);
@@ -45,7 +55,7 @@ private:
 	pcap_t* m_pcap;
 	int m_link_layer;
 	std::atomic<uint32_t> m_closed;
-	std::array<uint64_t, buffer_size> m_buffer;
+	std::array<uint64_t, receive_buffer_size> m_buffer;
 
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
@@ -55,7 +65,7 @@ private:
 	// bytes of payload. This is double buffered. Other threads write to one
 	// buffer while the sending thread reads from the other. This lowers the
 	// lock contention while sending
-	std::array<uint8_t, 0x100000> m_send_buffer[2];
+	std::vector<uint8_t> m_send_buffer[2];
 
 	// the cursor of where new outgoing packets should be written in the
 	// send buffer
@@ -68,5 +78,23 @@ private:
 
 	// the thread that's used to send the packets put in the send queue
 	std::thread m_send_thread;
+};
+
+struct packet_buffer
+{
+	friend struct packet_socket;
+
+	explicit packet_buffer(packet_socket& s)
+		: m_link_layer(s.m_link_layer)
+		, m_send_cursor(0)
+		, m_buf(0x100000)
+	{}
+
+	bool append(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
+
+private:
+	int m_link_layer;
+	int m_send_cursor;
+	std::vector<uint8_t> m_buf;
 };
 

@@ -1,8 +1,12 @@
 
 #include <array>
 
+struct packet_buffer;
+
 struct packet_socket
 {
+	friend struct packet_buffer;
+
 	explicit packet_socket(bool receive = false);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
@@ -10,7 +14,7 @@ struct packet_socket
 
 	void close();
 
-	bool send(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
+	bool send(packet_buffer& packets);
 
 	// fills in the in_packets array with incoming packets. Returns the number filled in
 	int receive(incoming_packet_t* in_packets, int num);
@@ -20,5 +24,19 @@ private:
 	// overlay structs to parse out packets
 	std::array<uint64_t, 1500/8> m_buffer;
 	bool m_receive;
+};
+
+struct packet_buffer
+{
+	friend struct packet_socket;
+
+	explicit packet_buffer(packet_socket& s)
+		: m_socket(s.m_socket)
+	{}
+
+	bool append(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
+
+private:
+	int m_socket;
 };
 

@@ -83,6 +83,9 @@ void announce_thread::thread_fun()
 
 	// round-robin for timing out peers
 	swarm_map_t::iterator next_to_purge = m_swarms.begin();
+
+	packet_buffer send_buffer(m_sock);
+
 	for (;;)
 	{
 		std::unique_lock<std::mutex> l(m_mutex);
@@ -153,7 +156,7 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					if (!m_sock.send(iov, 2, (sockaddr*)&m.from, m.fromlen))
+					if (!send_buffer.append(iov, 2, (sockaddr*)&m.from, m.fromlen))
 						return;
 					break;
 				}
@@ -176,7 +179,7 @@ void announce_thread::thread_fun()
 					}
 
 					iovec iov = { &resp, 8 + 12};
-					if (!m_sock.send(&iov, 1, (sockaddr*)&m.from, m.fromlen))
+					if (!send_buffer.append(&iov, 1, (sockaddr*)&m.from, m.fromlen))
 						return;
 
 					break;
@@ -184,6 +187,7 @@ void announce_thread::thread_fun()
 			}
 		}
 		m_internal_queue.clear();
+		m_sock.send(send_buffer);
 	}
 }
 

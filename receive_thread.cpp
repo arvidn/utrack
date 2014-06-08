@@ -77,6 +77,9 @@ receive_thread::receive_thread(std::vector<announce_thread*> const& at)
 receive_thread::~receive_thread()
 {
 	m_sock.close();
+#ifndef USE_PCAP
+	m_send_sock.close();
+#endif
 	m_thread.join();
 }
 
@@ -95,6 +98,12 @@ void receive_thread::thread_fun()
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 
+#ifdef USE_PCAP
+	packet_buffer send_buffer(m_sock);
+#else
+	packet_buffer send_buffer(m_send_sock);
+#endif
+
 	incoming_packet_t pkts[1024];
 
 	for (;;)
@@ -103,7 +112,14 @@ void receive_thread::thread_fun()
 		if (recvd <= 0) break;
 		for (int i = 0; i < recvd; ++i)
 			incoming_packet(pkts[i].buffer, pkts[i].buflen
-				, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen);
+				, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen
+				, send_buffer);
+
+#ifdef USE_PCAP
+		m_sock.send(send_buffer);
+#else
+		m_send_sock.send(send_buffer);
+#endif
 	}
 }
 
@@ -111,7 +127,8 @@ void receive_thread::thread_fun()
 // the announce to the correct announce thread, that then takes over
 // and is responsible for responding
 void receive_thread::incoming_packet(char const* buf, int size
-	, sockaddr_in const* from, socklen_t fromlen)
+	, sockaddr_in const* from, socklen_t fromlen
+	, packet_buffer& send_buffer)
 {
 	bytes_in += size;
 
@@ -144,13 +161,8 @@ void receive_thread::incoming_packet(char const* buf, int size
 			resp.transaction_id = hdr->transaction_id;
 			++connects;
 			iovec iov = { &resp, 16};
-#ifdef USE_PCAP
-			if (m_sock.send(&iov, 1, (sockaddr*)from, fromlen))
+			if (send_buffer.append(&iov, 1, (sockaddr*)from, fromlen))
 				return;
-#else
-			if (m_send_sock.send(&iov, 1, (sockaddr*)from, fromlen))
-				return;
-#endif
 			break;
 		}
 		case action_announce:

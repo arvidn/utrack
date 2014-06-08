@@ -50,6 +50,9 @@ packet_socket::packet_socket(bool receive)
 	, m_buffer_idx(0)
 	, m_send_thread(&packet_socket::send_thread, this)
 {
+	m_send_buffer[0].resize(send_buffer_size);
+	m_send_buffer[1].resize(send_buffer_size);
+
 	char error_msg[PCAP_ERRBUF_SIZE];
 	m_pcap = pcap_create("lo0", error_msg);
 	if (m_pcap == nullptr)
@@ -117,26 +120,46 @@ void packet_socket::close()
 		pcap_breakloop(m_pcap);
 }
 
-bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
+bool packet_socket::send(packet_buffer& packets)
+{
+	std::lock_guard<std::mutex> l(m_mutex);
+
+	if (packets.m_send_cursor == 0) return true;
+
+	if (m_send_cursor + packets.m_send_cursor > m_send_buffer[m_buffer_idx].size())
+	{
+		fprintf(stderr, "send: packet buffer too large (dropping %d kiB)\n"
+			, packets.m_send_cursor / 1024);
+		packets.m_send_cursor = 0;
+		return false;
+	}
+
+	memcpy(&m_send_buffer[m_buffer_idx][m_send_cursor]
+		, packets.m_buf.data(), packets.m_send_cursor);
+
+	m_send_cursor += packets.m_send_cursor;
+	packets.m_send_cursor = 0;
+	return true;
+}
+
+bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
 {
 	int buf_size = 0;
 	for (int i = 0; i < num; ++i) buf_size += v[i].iov_len;
 
 	if (buf_size > 1500 - 28 - 30)
 	{
-		fprintf(stderr, "send: packet too large\n");
+		fprintf(stderr, "append: packet too large\n");
 		return false;
 	}
 
-	std::lock_guard<std::mutex> l(m_mutex);
-
-	if (m_send_cursor + buf_size + 28 + 30 > m_send_buffer[m_buffer_idx].size())
+	if (m_send_cursor + buf_size + 28 + 30 > m_buf.size())
 	{
-		fprintf(stderr, "send buffer full\n");
+		fprintf(stderr, "packet buffer full\n");
 		return false;
 	}
 
-	std::uint8_t* ptr = &m_send_buffer[m_buffer_idx][m_send_cursor];
+	std::uint8_t* ptr = &m_buf[m_send_cursor];
 
 	std::uint8_t* prefix = ptr;
 	ptr += 2;
@@ -279,6 +302,14 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 {
 	receive_state* st = (receive_state*)user;
 
+	if (st->current >= st->len)
+	{
+		fprintf(stderr, "receive iov full (%d) (why is this callback still being called?)\n"
+			, st->current);
+		pcap_breakloop(st->handle);
+		return;
+	}
+
 	// TODO: support IPv6 also
 
 	uint8_t const* ip_header = bytes + st->link_header_size;
@@ -308,13 +339,16 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	int len = h->caplen - 28 - st->link_header_size;
 	bytes += 28 + st->link_header_size;
 
-	incoming_packet_t& pkt = st->pkts[st->current];
-	int len8 = (len + 7) / 8;
-	if (st->buffer_offset + len8 > buffer_size)
+	if (len > 1500)
 	{
-		pcap_breakloop(st->handle);
+		fprintf(stderr, "incoming packet too large\n");
 		return;
 	}
+
+	incoming_packet_t& pkt = st->pkts[st->current];
+	int len8 = (len + 7) / 8;
+
+	assert(st->buffer_offset + len8 <= buffer_size);
 
 	memcpy(&st->buffer[st->buffer_offset], bytes, len);
 	pkt.buffer = (char*)&st->buffer[st->buffer_offset];
@@ -332,6 +366,15 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	pkt.fromlen = sizeof(sockaddr_in);
 
 	++st->current;
+
+	// if we won't fit another full packet, break the loop and deliver the
+	// packets we have so far to the user, then resume reading more packets
+	if (st->buffer_offset + 1500/8 > receive_buffer_size)
+	{
+		fprintf(stderr, "receive buffer full\n");
+		pcap_breakloop(st->handle);
+		return;
+	}
 }
 
 void packet_socket::send_thread()
@@ -339,7 +382,7 @@ void packet_socket::send_thread()
 	bool sleep = false;
 	while (!m_closed)
 	{
-		std::array<std::uint8_t, 0x100000> const* buf;
+		std::vector<std::uint8_t> const* buf;
 		int end;
 
 		if (sleep)
@@ -414,7 +457,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	{
 		if (m_closed) return -1;
 
-		r = pcap_dispatch(m_pcap, num, &packet_handler, (uint8_t*)&st);
+		r = pcap_dispatch(m_pcap, num - st.current, &packet_handler, (uint8_t*)&st);
 		if (r < 0)
 		{
 			fprintf(stderr, "pcap_dispatch() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
@@ -426,6 +469,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 		if (!reset_timeout)
 		{
+			fprintf(stderr, "dispatch returned 0 packets\n");
 			r = pcap_set_timeout(m_pcap, 100);
 			if (r == -1)
 				fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));

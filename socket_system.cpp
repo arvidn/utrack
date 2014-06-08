@@ -126,11 +126,16 @@ packet_socket::packet_socket(packet_socket&& s)
 	s.m_socket = -1;
 }
 
-// send a packet and retry on EINTR
-bool packet_socket::send(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
+bool packet_socket::send(packet_buffer& packets)
 {
+	// This is NOP. packets are sent directly when added to packet_buffer.
 	assert(!m_receive);
+	return true;
+}
 
+// send a packet and retry on EINTR
+bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
+{
 	msghdr msg;
 	msg.msg_name = (void*)to;
 	msg.msg_namelen = tolen;
