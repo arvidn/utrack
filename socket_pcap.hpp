@@ -36,7 +36,7 @@ struct packet_socket
 {
 	friend struct packet_buffer;
 
-	explicit packet_socket(bool receive = false);
+	explicit packet_socket(char const* device);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
 	packet_socket(packet_socket const&) = delete;
@@ -56,6 +56,8 @@ private:
 	int m_link_layer;
 	std::atomic<uint32_t> m_closed;
 	std::array<uint64_t, receive_buffer_size> m_buffer;
+
+	uint32_t m_our_ipv4;
 
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
@@ -89,6 +91,7 @@ struct packet_buffer
 	explicit packet_buffer(packet_socket& s)
 		: m_link_layer(s.m_link_layer)
 		, m_send_cursor(0)
+		, m_from_ipv4(s.m_our_ipv4)
 		, m_buf(0x100000)
 	{}
 
@@ -97,6 +100,8 @@ struct packet_buffer
 private:
 	int m_link_layer;
 	int m_send_cursor;
+	uint32_t m_from_ipv4;
+	// TODO: we need from-MAC address too
 	std::vector<uint8_t> m_buf;
 };
 

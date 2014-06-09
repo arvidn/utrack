@@ -103,14 +103,14 @@ int main(int argc, char* argv[])
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 
 #ifdef USE_PCAP
-	packet_socket socket(true);
+	packet_socket socket("lo0");
 #endif
 
 	// create threads. We should create the same number of
 	// announce threads as we have cores on the machine
 	printf("starting %d announce threads\n", num_cores);
 #if defined __linux__
-	cpu_set_ti* cpu = CPU_ALLOC(std::thread::hardware_concurrency());
+	cpu_set_ti* cpu = CPU_ALLOC(num_cores);
 #endif
 	for (int i = 0; i < num_cores; ++i)
 	{
@@ -124,13 +124,18 @@ int main(int argc, char* argv[])
 		std::thread::native_handle_type h = announce_threads.back()->native_handle();
 		CPU_CLEAR(cpu);
 		CPU_SET(i, cpu);
-		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
+		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
 #else
 #endif
 	}
 
-	printf("starting %d receive threads\n", num_cores);
-	for (int i = 0; i < 1; ++i)
+#ifdef USE_PCAP
+	const int num_receive_threads = 1;
+#else
+	const int num_receive_threads = num_cores;
+#endif
+	printf("starting %d receive threads\n", num_receive_threads);
+	for (int i = 0; i < num_receive_threads; ++i)
 	{
 #ifdef USE_PCAP
 		receive_threads.push_back(new receive_thread(socket, announce_threads));

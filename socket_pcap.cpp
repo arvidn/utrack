@@ -29,6 +29,9 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <sys/socket.h> // for iovec
 #include <assert.h>
 #include <netinet/in.h> // for sockaddr
+#include <net/if.h> // for ifreq
+#include <sys/sockio.h> // for SIOCGIFADDR
+#include <sys/ioctl.h>
 
 #include <atomic>
 #include <mutex>
@@ -43,9 +46,10 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 extern std::atomic<uint32_t> bytes_out;
 
-packet_socket::packet_socket(bool receive)
+packet_socket::packet_socket(char const* device)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
+	, m_our_ipv4(0)
 	, m_send_cursor(0)
 	, m_buffer_idx(0)
 	, m_send_thread(&packet_socket::send_thread, this)
@@ -54,7 +58,7 @@ packet_socket::packet_socket(bool receive)
 	m_send_buffer[1].resize(send_buffer_size);
 
 	char error_msg[PCAP_ERRBUF_SIZE];
-	m_pcap = pcap_create("lo0", error_msg);
+	m_pcap = pcap_create(device, error_msg);
 	if (m_pcap == nullptr)
 	{
 		fprintf(stderr, "failed to create packet capture handle: %s"
@@ -88,6 +92,37 @@ packet_socket::packet_socket(bool receive)
 	r = pcap_setdirection(m_pcap, PCAP_D_IN);
 	if (r == -1)
 		fprintf(stderr, "pcap_setdirection() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+
+	ifreq req;
+	strncpy(req.ifr_name, device, IFNAMSIZ);
+	int s = socket(AF_INET, SOCK_DGRAM, 0);
+	if (s < 0)
+	{
+		fprintf(stderr, "socket() = %d \"%s\"\n", r, strerror(errno));
+		exit(-1);
+	}
+	r = ioctl(s, SIOCGIFADDR, &req);
+	::close(s);
+
+	if (r == 0)
+	{
+		sockaddr* our_ip = &req.ifr_addr;
+		if (our_ip->sa_family != AF_INET)
+		{
+			fprintf(stderr, "device \"%s\" is not supported\n", device);
+			exit(-1);
+		}
+		m_our_ipv4 = ((sockaddr_in*)our_ip)->sin_addr.s_addr;
+	}
+	else
+		fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
+
+	uint32_t host_ip = ntohl(m_our_ipv4);
+	printf("bound to %d.%d.%d.%d\n"
+		, (host_ip >> 24) & 0xff
+		, (host_ip >> 16) & 0xff
+		, (host_ip >> 8) & 0xff
+		, host_ip & 0xff);
 
 	pcap_activate(m_pcap);
 
@@ -133,6 +168,8 @@ bool packet_socket::send(packet_buffer& packets)
 		packets.m_send_cursor = 0;
 		return false;
 	}
+
+	bytes_out += packets.m_send_cursor;
 
 	memcpy(&m_send_buffer[m_buffer_idx][m_send_cursor]
 		, packets.m_buf.data(), packets.m_send_cursor);
@@ -220,8 +257,7 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_
 	ip_header[11] = 0;
 
 	// from addr
-	// TODO: store our IP somewhere so we can insert it here
-	memcpy(ip_header + 12, &sin->sin_addr.s_addr, 4);
+	memcpy(ip_header + 12, &m_from_ipv4, 4);
 
 	// to addr
 	memcpy(ip_header + 16, &sin->sin_addr.s_addr, 4);
@@ -446,7 +482,6 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 		case DLT_NULL: st.link_header_size = 4; break;
 		default:
 			assert(false);
-	
 	}
 
 	int r;
