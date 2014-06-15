@@ -40,7 +40,6 @@ struct announce_msg
 		udp_scrape_message scrape;
 	} bits;
 	sockaddr_in from;
-	socklen_t fromlen;
 };
 
 extern "C" int siphash(unsigned char *out, const unsigned char *in

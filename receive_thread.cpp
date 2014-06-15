@@ -23,6 +23,8 @@ Copyright (C) 2010-201$  Arvid Norberg
 #include "config.hpp"
 
 #include <signal.h>
+#include <cinttypes>
+#include <cassert>
 
 extern std::atomic<uint32_t> connects;
 extern std::atomic<uint32_t> errors;
@@ -114,8 +116,7 @@ void receive_thread::thread_fun()
 		if (recvd <= 0) break;
 		for (int i = 0; i < recvd; ++i)
 			incoming_packet(pkts[i].buffer, pkts[i].buflen
-				, (sockaddr_in*)&pkts[i].from, pkts[0].fromlen
-				, send_buffer, announce_buf.data());
+				, (sockaddr_in*)&pkts[i].from, send_buffer, announce_buf.data());
 
 #ifdef USE_PCAP
 		m_sock.send(send_buffer);
@@ -139,8 +140,8 @@ void receive_thread::thread_fun()
 // threads go. It's an array of announce_msg buffers, one entry per
 // announce thread.
 void receive_thread::incoming_packet(char const* buf, int size
-	, sockaddr_in const* from, socklen_t fromlen
-	, packet_buffer& send_buffer, std::vector<announce_msg>* announce_buf)
+	, sockaddr_in const* from, packet_buffer& send_buffer
+	, std::vector<announce_msg>* announce_buf)
 {
 	bytes_in += size;
 
@@ -163,7 +164,8 @@ void receive_thread::incoming_packet(char const* buf, int size
 			if (be64toh(hdr->connection_id) != 0x41727101980LL)
 			{
 				++errors;
-				printf("invalid connection ID for connect message\n");
+				printf("invalid connection ID for connect message (%" PRIx64 ")\n"
+					, be64toh(hdr->connection_id));
 				// log error
 				return;
 			}
@@ -173,7 +175,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 			resp.transaction_id = hdr->transaction_id;
 			++connects;
 			iovec iov = { &resp, 16};
-			if (send_buffer.append(&iov, 1, (sockaddr*)from, fromlen))
+			if (send_buffer.append(&iov, 1, from))
 				return;
 			break;
 		}
@@ -205,7 +207,6 @@ void receive_thread::incoming_packet(char const* buf, int size
 			announce_msg m;
 			m.bits.announce = *hdr;
 			m.from = *from;
-			m.fromlen = fromlen;
 
 			// use siphash here to prevent hash collision attacks causing one
 			// thread to overload
@@ -242,7 +243,6 @@ void receive_thread::incoming_packet(char const* buf, int size
 			announce_msg m;
 			m.bits.scrape = *req;
 			m.from = *from;
-			m.fromlen = fromlen;
 			int thread_selector = req->hash[0].val[0] % m_announce_threads.size();
 			announce_buf[thread_selector].push_back(m);
 
@@ -250,6 +250,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 		}
 		default:
 			printf("unknown action %d\n", ntohl(hdr->action));
+			assert(false);
 			++errors;
 			break;
 	}

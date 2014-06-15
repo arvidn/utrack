@@ -46,10 +46,9 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 extern std::atomic<uint32_t> bytes_out;
 
-packet_socket::packet_socket(char const* device)
+packet_socket::packet_socket(char const* device, int listen_port)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
-	, m_our_ipv4(0)
 	, m_send_cursor(0)
 	, m_buffer_idx(0)
 	, m_send_thread(&packet_socket::send_thread, this)
@@ -93,31 +92,40 @@ packet_socket::packet_socket(char const* device)
 	if (r == -1)
 		fprintf(stderr, "pcap_setdirection() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
-	ifreq req;
-	strncpy(req.ifr_name, device, IFNAMSIZ);
-	int s = socket(AF_INET, SOCK_DGRAM, 0);
-	if (s < 0)
+	if (listen_port != 0)
 	{
-		fprintf(stderr, "socket() = %d \"%s\"\n", r, strerror(errno));
-		exit(-1);
-	}
-	r = ioctl(s, SIOCGIFADDR, &req);
-	::close(s);
-
-	if (r == 0)
-	{
-		sockaddr* our_ip = &req.ifr_addr;
-		if (our_ip->sa_family != AF_INET)
+		ifreq req;
+		strncpy(req.ifr_name, device, IFNAMSIZ);
+		int s = socket(AF_INET, SOCK_DGRAM, 0);
+		if (s < 0)
 		{
-			fprintf(stderr, "device \"%s\" is not supported\n", device);
+			fprintf(stderr, "socket() = %d \"%s\"\n", r, strerror(errno));
 			exit(-1);
 		}
-		m_our_ipv4 = ((sockaddr_in*)our_ip)->sin_addr.s_addr;
+		r = ioctl(s, SIOCGIFADDR, &req);
+		::close(s);
+
+		if (r == 0)
+		{
+			sockaddr_in* our_ip = (sockaddr_in*)&req.ifr_addr;
+			if (our_ip->sin_family != AF_INET)
+			{
+				fprintf(stderr, "device \"%s\" is not supported\n", device);
+				exit(-1);
+			}
+			m_our_addr = *our_ip;
+		}
+		else
+			fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
 	}
 	else
-		fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
+	{
+		m_our_addr.sin_addr.s_addr = 0;
+	}
 
-	uint32_t host_ip = ntohl(m_our_ipv4);
+	m_our_addr.sin_port = htons(listen_port);
+
+	uint32_t host_ip = ntohl(m_our_addr.sin_addr.s_addr);
 	printf("bound to %d.%d.%d.%d\n"
 		, (host_ip >> 24) & 0xff
 		, (host_ip >> 16) & 0xff
@@ -130,8 +138,14 @@ packet_socket::packet_socket(char const* device)
 	if (m_link_layer < 0)
 		fprintf(stderr, "pcap_datalink() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
+	// TODO: it would be nice to be able to bind to a specific
+	// IP too, not just port
+	char program_text[100];
+	char const* format_string = "udp dst port %d";
+	if (listen_port == 0) format_string = "udp";
+	snprintf(program_text, sizeof(program_text), format_string, listen_port);
 	bpf_program p;
-	r = pcap_compile(m_pcap, &p, "udp dst port 8080", 1, PCAP_NETMASK_UNKNOWN);
+	r = pcap_compile(m_pcap, &p, program_text, 1, PCAP_NETMASK_UNKNOWN);
 	if (r == -1)
 		fprintf(stderr, "pcap_compile() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
@@ -179,7 +193,14 @@ bool packet_socket::send(packet_buffer& packets)
 	return true;
 }
 
-bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
+bool packet_buffer::append(iovec const* v, int num
+	, sockaddr_in const* to)
+{
+	return append_impl(v, num, to, &m_from);
+}
+
+bool packet_buffer::append_impl(iovec const* v, int num
+	, sockaddr_in const* to, sockaddr_in const* from)
 {
 	int buf_size = 0;
 	for (int i = 0; i < num; ++i) buf_size += v[i].iov_len;
@@ -219,13 +240,11 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_
 			return false;
 	}
 
-	if (to->sa_family != AF_INET)
+	if (to->sin_family != AF_INET)
 	{
 		fprintf(stderr, "unsupported network protocol (only IPv4 is supported)\n");
 		return false;
 	}
-
-	sockaddr_in const* sin = (sockaddr_in const*)to;
 
 	std::uint8_t* ip_header = ptr;
 
@@ -257,10 +276,10 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_
 	ip_header[11] = 0;
 
 	// from addr
-	memcpy(ip_header + 12, &m_from_ipv4, 4);
+	memcpy(ip_header + 12, &from->sin_addr.s_addr, 4);
 
 	// to addr
-	memcpy(ip_header + 16, &sin->sin_addr.s_addr, 4);
+	memcpy(ip_header + 16, &to->sin_addr.s_addr, 4);
 
 	// calculate the checksum
 	std::uint16_t chk = 0;
@@ -278,11 +297,8 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_
 
 	std::uint8_t* udp_header = ip_header + 20;
 
-	extern int listen_port;
-
-	udp_header[0] = listen_port >> 8;
-	udp_header[1] = listen_port & 0xff;
-	memcpy(&udp_header[2], &sin->sin_port, 2);
+	memcpy(&udp_header[0], &from->sin_port, 2);
+	memcpy(&udp_header[2], &to->sin_port, 2);
 	udp_header[4] = (buf_size + 8) >> 8;
 	udp_header[5] = (buf_size + 8) & 0xff;
 
@@ -331,6 +347,10 @@ struct receive_state
 	// the number of bytes to skip in each buffer to get to the IP
 	// header.
 	int link_header_size;
+
+	// ignore packets sent to other addresses and ports than this one.
+	// a port of 0 means accept packets on any port
+	sockaddr_in local_addr;
 };
 
 void packet_handler(u_char *user, const struct pcap_pkthdr *h
@@ -353,7 +373,8 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// we only support IPv4 for now, and no IP options, just
 	// the 20 byte header
 
-	// version and length
+	// version and length. Ignore any non IPv4 packets and any packets
+	// with IP options headers
 	if (ip_header[0] != 0x45) return;
 
 	// flags (ignore any packet with more-fragments set)
@@ -367,10 +388,16 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 
 	uint8_t const* udp_header = ip_header + 20;
 
-	extern int listen_port;
-
 	// only look at packets to our listen port
-	if (((int(udp_header[2]) << 8) | udp_header[3]) != listen_port) return;
+	if (st->local_addr.sin_port != 0 &&
+		memcmp(&udp_header[2], &st->local_addr.sin_port, 2) != 0)
+		return;
+
+	// only look at packets sent to the IP we bound to
+	// address 0 means any address
+	if (st->local_addr.sin_addr.s_addr != 0 &&
+		memcmp(&st->local_addr.sin_addr.s_addr, ip_header + 16, 4) != 0)
+		return;
 
 	int len = h->caplen - 28 - st->link_header_size;
 	bytes += 28 + st->link_header_size;
@@ -384,7 +411,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	incoming_packet_t& pkt = st->pkts[st->current];
 	int len8 = (len + 7) / 8;
 
-	assert(st->buffer_offset + len8 <= buffer_size);
+	assert(st->buffer_offset + len8 <= receive_buffer_size);
 
 	memcpy(&st->buffer[st->buffer_offset], bytes, len);
 	pkt.buffer = (char*)&st->buffer[st->buffer_offset];
@@ -399,7 +426,6 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// UDP header: src-port, dst-port, len, chksum
 	memcpy(&from->sin_port, udp_header, 2);
 	memcpy(&from->sin_addr, ip_header + 12, 4);
-	pkt.fromlen = sizeof(sockaddr_in);
 
 	++st->current;
 
@@ -407,7 +433,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// packets we have so far to the user, then resume reading more packets
 	if (st->buffer_offset + 1500/8 > receive_buffer_size)
 	{
-		fprintf(stderr, "receive buffer full\n");
+//		fprintf(stderr, "receive buffer full\n");
 		pcap_breakloop(st->handle);
 		return;
 	}
@@ -426,7 +452,8 @@ void packet_socket::send_thread()
 			// we did not see any packets in the buffer last cycle
 			// through. sleep for a while to see if there are any in
 			// a little bit
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+//			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::this_thread::yield();
 			sleep = false;
 		}
 
@@ -476,6 +503,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	st.buffer = m_buffer.data();
 	st.buffer_offset = 0;
 	st.handle = m_pcap;
+	st.local_addr = m_our_addr;
 
 	switch (m_link_layer)
 	{
@@ -493,7 +521,8 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 		if (m_closed) return -1;
 
 		r = pcap_dispatch(m_pcap, num - st.current, &packet_handler, (uint8_t*)&st);
-		if (r < 0)
+
+		if (r == -1)
 		{
 			fprintf(stderr, "pcap_dispatch() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 			if (r == -3) exit(2);

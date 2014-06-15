@@ -31,7 +31,6 @@ Copyright (C) 2013-2014 Arvid Norberg
 struct incoming_packet_t
 {
 	sockaddr_storage from;
-	socklen_t fromlen;
 	char* buffer;
 	int buflen;
 };

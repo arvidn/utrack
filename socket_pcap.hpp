@@ -21,6 +21,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 enum {
 	// the receive buffer size for packets, specified in uint64_ts
@@ -36,7 +37,8 @@ struct packet_socket
 {
 	friend struct packet_buffer;
 
-	explicit packet_socket(char const* device);
+	// a listen port of 0 means accept packets on any port
+	explicit packet_socket(char const* device, int listen_port);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
 	packet_socket(packet_socket const&) = delete;
@@ -57,7 +59,7 @@ private:
 	std::atomic<uint32_t> m_closed;
 	std::array<uint64_t, receive_buffer_size> m_buffer;
 
-	uint32_t m_our_ipv4;
+	sockaddr_in m_our_addr;
 
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
@@ -91,16 +93,19 @@ struct packet_buffer
 	explicit packet_buffer(packet_socket& s)
 		: m_link_layer(s.m_link_layer)
 		, m_send_cursor(0)
-		, m_from_ipv4(s.m_our_ipv4)
+		, m_from(s.m_our_addr)
 		, m_buf(0x100000)
 	{}
 
-	bool append(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
+	bool append(iovec const* v, int num, sockaddr_in const* to);
+
+	bool append_impl(iovec const* v, int num, sockaddr_in const* to
+		, sockaddr_in const* from);
 
 private:
 	int m_link_layer;
 	int m_send_cursor;
-	uint32_t m_from_ipv4;
+	sockaddr_in m_from;
 	// TODO: we need from-MAC address too
 	std::vector<uint8_t> m_buf;
 };

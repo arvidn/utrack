@@ -60,8 +60,7 @@ struct receive_thread
 	// the announce to the correct announce thread, that then takes over
 	// and is responsible for responding
 	void incoming_packet(char const* buf, int size, sockaddr_in const* from
-		, socklen_t fromlen, packet_buffer& send_buffer
-		, std::vector<announce_msg>* announce_buf);
+		, packet_buffer& send_buffer, std::vector<announce_msg>* announce_buf);
 
 private:
 

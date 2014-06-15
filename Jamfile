@@ -24,5 +24,5 @@ exe utrack
 	<libpcap>off:<source>socket_system.cpp
 	;
 
-exe udp_test : test_announce.cpp ;
+exe udp_test : socket_pcap.cpp test_announce.cpp : <library>pcap ;
 

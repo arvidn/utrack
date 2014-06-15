@@ -160,7 +160,7 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					if (!send_buffer.append(iov, 2, (sockaddr*)&m.from, m.fromlen))
+					if (!send_buffer.append(iov, 2, &m.from))
 						return;
 					break;
 				}
@@ -183,7 +183,7 @@ void announce_thread::thread_fun()
 					}
 
 					iovec iov = { &resp, 8 + 12};
-					if (!send_buffer.append(&iov, 1, (sockaddr*)&m.from, m.fromlen))
+					if (!send_buffer.append(&iov, 1, &m.from))
 						return;
 
 					break;

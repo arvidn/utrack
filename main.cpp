@@ -103,7 +103,7 @@ int main(int argc, char* argv[])
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 
 #ifdef USE_PCAP
-	packet_socket socket("lo0");
+	packet_socket socket("lo0", listen_port);
 #endif
 
 	// create threads. We should create the same number of

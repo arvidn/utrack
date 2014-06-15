@@ -34,26 +34,10 @@ Copyright (C) 2010-2014 Arvid Norberg
 
 #include "messages.hpp"
 #include "endian.hpp"
+#include "socket.hpp"
 
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
-
-sockaddr_in to;
-
-bool send(int socket, char const* buf, int len, sockaddr const* to, socklen_t tolen)
-{
-	ssize_t ret = 0;
-retry_send:
-	ret = sendto(socket, buf, len, MSG_NOSIGNAL, to, tolen);
-	if (ret == -1)
-	{
-		if (errno == EINTR) goto retry_send;
-		fprintf(stderr, "sendto failed (%d): %s\n", errno, strerror(errno));
-		return 1;
-	}
-	return 0;
-}
+std::atomic<uint32_t> bytes_out(ATOMIC_VAR_INIT(0));
+bool m_quit = false;
 
 sha1_hash random_hash()
 {
@@ -65,203 +49,155 @@ sha1_hash random_hash()
 	return ret;
 }
 
-int announce_one_peer(int s, int num_peers, uint32_t* ip, sha1_hash const& ih, int event, int action)
+sha1_hash get_info_hash(int idx)
 {
-//	printf("announcing %x on swarm %x event %d\n", ip, ih.val[0], event);
-
-	// use uint64_t to make the buffer properly aligned
-	uint64_t buffer[1500/8];
-
-	std::vector<udp_announce_message> reqs(num_peers);
-
-	for (int i = 0; i < num_peers; ++i)
+	sha1_hash ret;
+	for (int i = 0; i < 5; ++i)
 	{
-		udp_announce_message& req = reqs[i];
-		req.action = htonl(action_connect);
-		req.connection_id = be64toh(0x41727101980LL);
-		req.transaction_id = (rand() << 16) ^ rand();
-		if (send(s, (char*)&req, 16, (sockaddr*)&to, sizeof(to)))
-			return 1;
+		ret.val[i] = idx & 0xff;
 	}
-
-	int len = sizeof(reqs[0]);
-	for (int i = 0; i < num_peers; ++i)
-	{
-		udp_announce_message& req = reqs[i];
-
-		sockaddr from;
-		socklen_t fromlen = sizeof(from);
-		int r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
-		if (r == -1)
-		{
-			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
-			return 1;
-		}
-
-		udp_connect_response* resp = (udp_connect_response*)buffer;
-
-		req.connection_id = resp->connection_id;
-		req.action = htonl(action);
-		req.transaction_id = (rand() << 16) ^ rand();
-		req.hash = ih;
-
-		if (action == action_scrape)
-		{
-			len = 16 + 20;
-		}
-		else
-		{
-			req.peer_id = random_hash();
-			req.downloaded = 0;
-			req.left = event == event_started ? htonl(1000) : 0;
-			req.uploaded = 0;
-			req.event = htonl(event);
-			req.ip = ip[i];
-			req.key = rand();
-			req.num_want = htonl(200);
-			req.port = rand();
-			req.extensions = 0;
-		}
-
-	}
-
-	for (int i = 0; i < num_peers; ++i)
-	{
-		udp_announce_message& req = reqs[i];
-		if (send(s, (char*)&req, len, (sockaddr*)&to, sizeof(to)))
-			return 1;
-	}
-
-	for (int i = 0; i < num_peers; ++i)
-	{
-		sockaddr from;
-		socklen_t fromlen = sizeof(from);
-		int r = recvfrom(s, buffer, sizeof(buffer), 0, &from, &fromlen);
-		if (r == -1)
-		{
-			fprintf(stderr, "recvfrom failed (%d): %s\n", errno, strerror(errno));
-			return 1;
-		}
-
-		if (action == action_scrape)
-		{
-			udp_scrape_response* scr = (udp_scrape_response*)buffer;
-//			printf("scrape response h: %x d: %u s: %u c: %u\n", ih.val[0]
-//				, ntohl(scr->data[0].downloaders)
-//				, ntohl(scr->data[0].seeds)
-//				, ntohl(scr->data[0].download_count));
-		}
-	}
-	return 0;
+	return ret;
 }
 
-void* announce_thread(void* arg)
+void send_connect(sockaddr_in const* to, packet_buffer& buf)
 {
-	sha1_hash info_hashes[100];
-	for (int i = 0; i < sizeof(info_hashes)/sizeof(info_hashes[0]); ++i)
+	static int idx = 0;
+
+	// only announce 2^24 times. at 100k requests / second that's
+	// still almost 3 minutes of runtime
+	if (idx > 0xffffff) return;
+
+	idx = (idx + 1) & 0xffffff;
+
+	udp_announce_message req;
+	req.connection_id = be64toh(0x41727101980LL);
+	req.action = htonl(action_connect);
+	req.transaction_id = htonl(idx);
+
+	sockaddr_in from;
+	from.sin_family = AF_INET;
+	from.sin_port = htons(1024 + idx);
+	from.sin_len = sizeof(sockaddr_in);
+	from.sin_addr.s_addr = htonl(0x7f000000 + idx);
+
+	iovec b = { &req, 16 };
+	buf.append_impl(&b, 1, to, &from);
+}
+
+void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
+	, packet_buffer& buf)
+{
+	udp_announce_message req;
+	req.action = htonl(action_announce);
+	req.connection_id = connection_id;
+	req.transaction_id = htonl((1 << 24) | idx);
+	req.hash = get_info_hash(idx);
+	req.peer_id = random_hash();
+	req.event = htonl(event_started);
+	req.ip = 0;
+	req.key = htonl(idx);
+	req.num_want = htonl(200);
+	req.port = htons(1024 + idx);
+	req.extensions = 0;
+
+	sockaddr_in from;
+	from.sin_family = AF_INET;
+	from.sin_port = htons(1024 + idx);
+	from.sin_len = sizeof(sockaddr_in);
+	from.sin_addr.s_addr = htonl(0x7f000000 + idx);
+
+	iovec b = { &req, sizeof(req) };
+	buf.append_impl(&b, 1, to, &from);
+}
+
+void incoming_packet(char const* buf, int size
+	, sockaddr_in const* from, packet_buffer& send_buffer)
+{
+	udp_announce_response const* resp = (udp_announce_response const*)buf;
+
+	if (size < sizeof(udp_connect_response))
 	{
-		info_hashes[i] = random_hash();
+		fprintf(stderr, "incoming packet too small (%d)\n", size);
+		return;
 	}
 
-	uint32_t peer_ips[500];
-	for (int i = 0; i < sizeof(peer_ips)/sizeof(peer_ips[0]); ++i)
+	switch (ntohl(resp->action))
 	{
-		peer_ips[i] = (rand() << 16) ^ rand();
-	}
-
-	int s = socket(PF_INET, SOCK_DGRAM, 0);
-	if (s < 0)
-	{
-		fprintf(stderr, "failed to open socket (%d): %s\n"
-			, errno, strerror(errno));
-		return 0;
-	}
-
-	int port = (rand() % 60000) + 2000;
-	sockaddr_in addr;
-	memset(&addr, 0, sizeof(addr));
-	addr.sin_len = sizeof(addr);
-	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = htons(port);
-	printf("binding socket to %d\n", port);
-	int r = bind(s, (sockaddr*)&addr, sizeof(addr));
-	if (r < 0)
-	{
-		fprintf(stderr, "failed to bind socket to port %d (%d): %s\n"
-			, port, errno, strerror(errno));
-		return 0;
-	}
-
-	int events[] = { event_started, event_completed, event_stopped };
-
-	for (int e = 0; e < 3; ++e)
-	{
-//		printf("event: %d\n", e);
-		for (int ih = 0; ih < sizeof(info_hashes)/sizeof(info_hashes[0]); ++ih)
+		case action_announce:
 		{
-			int num_peers = sizeof(peer_ips)/sizeof(peer_ips[0]);
-			announce_one_peer(s, num_peers, peer_ips, info_hashes[ih], events[e], action_announce);
-			announce_one_peer(s, 1, peer_ips, info_hashes[ih], event_stopped, action_scrape);
+			int idx = ntohl(resp->transaction_id);
+			if ((idx >> 24) != 1)
+			{
+				fprintf(stderr, "invalid transaction id for announce response\n");
+				return;
+			}
+			idx &= 0xffffff;
+			static int num_responses = 0;
+			++num_responses;
+			if (num_responses == 0xffffff) m_quit = true;
+			break;
+		}
+		case action_connect:
+		{
+			udp_connect_response const* resp = (udp_connect_response const*)buf;
+			int idx = ntohl(resp->transaction_id);
+			if ((idx >> 24) != 0)
+			{
+				fprintf(stderr, "invalid transaction id for connect response\n");
+				return;
+			}
+
+			send_announce(idx, resp->connection_id, from, send_buffer);
+			send_connect(from, send_buffer);
+			break;
 		}
 	}
-
-done:
-
-	close(s);
-
-	return 0;
 }
 
 int main(int argc, char* argv[])
 {
-	if (argc < 3)
+	if (argc < 4)
 	{
-		fprintf(stderr, "usage: ./udp_test address port\n");
+		fprintf(stderr, "usage: ./udp_test device address port\n");
 		return EXIT_FAILURE;
 	}
 
-	int num_threads = 200;
-
+	sockaddr_in to;
 	memset(&to, 0, sizeof(to));
 	to.sin_len = sizeof(to);
 	to.sin_family = AF_INET;
-	int r = inet_pton(AF_INET, argv[1], &to.sin_addr);
+	int r = inet_pton(AF_INET, argv[2], &to.sin_addr);
 	if (r < 0)
 	{
 		fprintf(stderr, "invalid target address \"%s\" (%d): %s\n", argv[1]
 			, errno, strerror(errno));
 		return EXIT_FAILURE;
 	}
-	to.sin_port = htons(atoi(argv[2]));
+	to.sin_port = htons(atoi(argv[3]));
 
-	pthread_t* threads = (pthread_t*)malloc(sizeof(pthread_t) * num_threads);
-	if (threads == NULL)
+	packet_socket sock(argv[1], 0);
+	packet_buffer send_buffer(sock);
+
+	for (int k = 0; k < 10; ++k)
 	{
-		fprintf(stderr, "failed allocate thread list (no memory)\n");
-		return EXIT_FAILURE;
+		for (int i = 0; i < 1000; ++i)
+			send_connect(&to, send_buffer);
+		sock.send(send_buffer);
 	}
 
-	// create threads
-	for (int i = 0; i < num_threads; ++i)
+	incoming_packet_t pkts[1024];
+	while (!m_quit)
 	{
-		printf("starting thread %d\n", i);
-		int r = pthread_create(&threads[i], NULL, &announce_thread, 0);
-		if (r != 0)
+		int recvd = sock.receive(pkts, sizeof(pkts)/sizeof(pkts[0]));
+		if (recvd <= 0) break;
+		for (int i = 0; i < recvd; ++i)
 		{
-			fprintf(stderr, "failed to create thread (%d): %s\n", r, strerror(r));
-			return EXIT_FAILURE;
+			incoming_packet(pkts[i].buffer, pkts[i].buflen
+				, (sockaddr_in*)&pkts[i].from, send_buffer);
 		}
+
+		sock.send(send_buffer);
 	}
-
-	for (int i = 0; i < num_threads; ++i)
-	{
-		void* retval = 0;
-		pthread_join(threads[i], &retval);
-		printf("thread %d terminated\n", i);
-	}
-
-	free(threads);
-
 	return EXIT_SUCCESS;
 }
+
