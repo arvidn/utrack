@@ -149,6 +149,7 @@ void incoming_packet(char const* buf, int size
 
 			send_announce(idx, resp->connection_id, from, send_buffer);
 			send_connect(from, send_buffer);
+			send_connect(from, send_buffer);
 			break;
 		}
 	}
@@ -178,12 +179,9 @@ int main(int argc, char* argv[])
 	packet_socket sock(argv[1], 0);
 	packet_buffer send_buffer(sock);
 
-	for (int k = 0; k < 50; ++k)
-	{
-		for (int i = 0; i < 1000; ++i)
-			send_connect(&to, send_buffer);
-		sock.send(send_buffer);
-	}
+	for (int i = 0; i < 100; ++i)
+		send_connect(&to, send_buffer);
+	sock.send(send_buffer);
 
 	incoming_packet_t pkts[1024];
 	while (!m_quit)

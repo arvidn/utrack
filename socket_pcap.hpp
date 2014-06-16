@@ -25,10 +25,10 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 enum {
 	// the receive buffer size for packets, specified in uint64_ts
-	receive_buffer_size = 16384,
+	receive_buffer_size = 0x40000,
 
 	// specified in bytes
-	send_buffer_size = 0x400000,
+	send_buffer_size = 0x800000,
 };
 
 struct packet_buffer;
