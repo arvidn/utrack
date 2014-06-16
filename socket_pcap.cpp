@@ -50,11 +50,8 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
 	, m_send_cursor(0)
-	, m_buffer_idx(0)
-	, m_send_thread(&packet_socket::send_thread, this)
 {
-	m_send_buffer[0].resize(send_buffer_size);
-	m_send_buffer[1].resize(send_buffer_size);
+	m_send_buffer.resize(send_buffer_size);
 
 	char error_msg[PCAP_ERRBUF_SIZE];
 	m_pcap = pcap_create(device, error_msg);
@@ -152,14 +149,16 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	r = pcap_setfilter(m_pcap, &p);
 	if (r == -1)
 		fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+
+	for (int i = 0; i < 3; ++i)
+		m_send_threads.emplace_back(&packet_socket::send_thread, this);
 }
 
 packet_socket::~packet_socket()
 {
 	close();
-	m_send_thread.join();
-	if (m_pcap)
-		pcap_close(m_pcap);
+	for (auto& t : m_send_threads) t.join();
+	if (m_pcap) pcap_close(m_pcap);
 }
 
 void packet_socket::close()
@@ -175,7 +174,7 @@ bool packet_socket::send(packet_buffer& packets)
 
 	if (packets.m_send_cursor == 0) return true;
 
-	if (m_send_cursor + packets.m_send_cursor > m_send_buffer[m_buffer_idx].size())
+	if (m_send_cursor + packets.m_send_cursor > m_send_buffer.size())
 	{
 		fprintf(stderr, "send: packet buffer too large (dropping %d kiB)\n"
 			, packets.m_send_cursor / 1024);
@@ -185,7 +184,7 @@ bool packet_socket::send(packet_buffer& packets)
 
 	bytes_out += packets.m_send_cursor;
 
-	memcpy(&m_send_buffer[m_buffer_idx][m_send_cursor]
+	memcpy(&m_send_buffer[m_send_cursor]
 		, packets.m_buf.data(), packets.m_send_cursor);
 
 	m_send_cursor += packets.m_send_cursor;
@@ -433,7 +432,6 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// packets we have so far to the user, then resume reading more packets
 	if (st->buffer_offset + 1500/8 > receive_buffer_size)
 	{
-//		fprintf(stderr, "receive buffer full\n");
 		pcap_breakloop(st->handle);
 		return;
 	}
@@ -441,47 +439,52 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 
 void packet_socket::send_thread()
 {
-	bool sleep = false;
+	std::vector<uint8_t> local_buffer;
+	local_buffer.resize(send_buffer_size);
+	int end;
+
+	// exponential back-off. The more read operations that return
+	// no packets, the longer we wait until we read again. This
+	// balances CPU usage when idle with wasting less time when busy
+	const static int sleep_timers[] = {0, 1, 5, 10, 50, 100, 500};
+	int sleep = 0;
 	while (!m_closed)
 	{
-		std::vector<std::uint8_t> const* buf;
-		int end;
-
-		if (sleep)
+		if (sleep > 0)
 		{
 			// we did not see any packets in the buffer last cycle
 			// through. sleep for a while to see if there are any in
 			// a little bit
-//			std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			std::this_thread::yield();
-			sleep = false;
+//			printf("sleep %d ms\n", sleep_timers[sleep-1]);
+			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_timers[sleep-1]));
 		}
 
 		{
 			std::lock_guard<std::mutex> l(m_mutex);
 			if (m_send_cursor == 0)
 			{
-				sleep = true;
+				if (sleep < sizeof(sleep_timers)/sizeof(sleep_timers[0]))
+					++sleep;
 				continue;
 			}
 
-			buf = &m_send_buffer[m_buffer_idx];
+			local_buffer.swap(m_send_buffer);
 
-			// flip to use the other buffer to put outgoing packets in
-			m_buffer_idx = (m_buffer_idx + 1) & 1;
 			end = m_send_cursor;
 			m_send_cursor = 0;
 		}
 
+		sleep = 0;
+
 		for (int i = 0; i < end;)
 		{
-			int len = ((*buf)[i] << 8) | (*buf)[i+1];
+			int len = (local_buffer[i] << 8) | local_buffer[i+1];
 			assert(len <= 1500);
 			assert(len > 0);
 			i += 2;
-			assert(buf->size() - i >= len);
+			assert(local_buffer.size() - i >= len);
 
-			int r = pcap_sendpacket(m_pcap, buf->data() + i
+			int r = pcap_sendpacket(m_pcap, local_buffer.data() + i
 				, len);
 
 			if (r == -1)

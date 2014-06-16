@@ -69,19 +69,14 @@ private:
 	// bytes of payload. This is double buffered. Other threads write to one
 	// buffer while the sending thread reads from the other. This lowers the
 	// lock contention while sending
-	std::vector<uint8_t> m_send_buffer[2];
+	std::vector<uint8_t> m_send_buffer;
 
 	// the cursor of where new outgoing packets should be written in the
 	// send buffer
 	int m_send_cursor;
 
-	// the index of the send buffer to use for writing new outgoing packets.
-	// the other buffer is used internally by the thread that's actually
-	// sending the packets
-	int m_buffer_idx;
-
 	// the thread that's used to send the packets put in the send queue
-	std::thread m_send_thread;
+	std::vector<std::thread> m_send_threads;
 };
 
 // TODO: WinPcap has a much more efficient bulk-sending API which would be

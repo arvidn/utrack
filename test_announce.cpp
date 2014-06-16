@@ -178,7 +178,7 @@ int main(int argc, char* argv[])
 	packet_socket sock(argv[1], 0);
 	packet_buffer send_buffer(sock);
 
-	for (int k = 0; k < 10; ++k)
+	for (int k = 0; k < 50; ++k)
 	{
 		for (int i = 0; i < 1000; ++i)
 			send_connect(&to, send_buffer);
