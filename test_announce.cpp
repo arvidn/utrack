@@ -37,7 +37,9 @@ Copyright (C) 2010-2014 Arvid Norberg
 #include "socket.hpp"
 
 std::atomic<uint32_t> bytes_out(ATOMIC_VAR_INIT(0));
-bool m_quit = false;
+std::atomic<uint32_t> connects = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> announces = ATOMIC_VAR_INIT(0);
+std::atomic<bool> m_quit(ATOMIC_VAR_INIT(false));
 
 sha1_hash random_hash()
 {
@@ -135,6 +137,7 @@ void incoming_packet(char const* buf, int size
 			static int num_responses = 0;
 			++num_responses;
 			if (num_responses == 0xffffff) m_quit = true;
+			++announces;
 			break;
 		}
 		case action_connect:
@@ -147,12 +150,21 @@ void incoming_packet(char const* buf, int size
 				return;
 			}
 
+			++connects;
 			send_announce(idx, resp->connection_id, from, send_buffer);
 			send_connect(from, send_buffer);
 			send_connect(from, send_buffer);
 			break;
 		}
 	}
+}
+
+packet_socket* g_sock = nullptr;
+
+void sigint(int s)
+{
+	m_quit = true;
+	if (g_sock) g_sock->close();
 }
 
 int main(int argc, char* argv[])
@@ -163,11 +175,27 @@ int main(int argc, char* argv[])
 		return EXIT_FAILURE;
 	}
 
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = &sigint;
+	int r = sigaction(SIGINT, &sa, 0);
+	if (r == -1)
+	{
+		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
+		return 1;
+	}
+	r = sigaction(SIGTERM, &sa, 0);
+	if (r == -1)
+	{
+		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
+		return 1;
+	}
+
 	sockaddr_in to;
 	memset(&to, 0, sizeof(to));
 	to.sin_len = sizeof(to);
 	to.sin_family = AF_INET;
-	int r = inet_pton(AF_INET, argv[2], &to.sin_addr);
+	r = inet_pton(AF_INET, argv[2], &to.sin_addr);
 	if (r < 0)
 	{
 		fprintf(stderr, "invalid target address \"%s\" (%d): %s\n", argv[1]
@@ -179,12 +207,20 @@ int main(int argc, char* argv[])
 	packet_socket sock(argv[1], 0);
 	packet_buffer send_buffer(sock);
 
+	g_sock = &sock;
+
+	typedef std::chrono::high_resolution_clock clock;
+	using std::chrono::duration_cast;
+	using std::chrono::milliseconds;
+
+	clock::time_point start = clock::now();
+
 	for (int i = 0; i < 100; ++i)
 		send_connect(&to, send_buffer);
 	sock.send(send_buffer);
 
 	incoming_packet_t pkts[1024];
-	while (!m_quit)
+	while (!m_quit.load())
 	{
 		int recvd = sock.receive(pkts, sizeof(pkts)/sizeof(pkts[0]));
 		if (recvd <= 0) break;
@@ -196,6 +232,18 @@ int main(int argc, char* argv[])
 
 		sock.send(send_buffer);
 	}
+
+	clock::time_point end = clock::now();
+
+	uint32_t last_connects = connects.exchange(0);
+	uint32_t last_announces = announces.exchange(0);
+
+	int ms = duration_cast<milliseconds>(end - start).count();
+
+	printf("connects/s: %u announces/s: %u\n"
+		, last_connects * 1000 / ms
+		, last_announces * 1000 / ms);
+
 	return EXIT_SUCCESS;
 }
 
