@@ -212,6 +212,7 @@ int main(int argc, char* argv[])
 	typedef std::chrono::high_resolution_clock clock;
 	using std::chrono::duration_cast;
 	using std::chrono::milliseconds;
+	using std::chrono::seconds;
 
 	clock::time_point start = clock::now();
 
@@ -231,6 +232,20 @@ int main(int argc, char* argv[])
 		}
 
 		sock.send(send_buffer);
+
+		clock::time_point now = clock::now();
+		if (now - start > seconds(5))
+		{
+			uint32_t last_connects = connects.exchange(0);
+			uint32_t last_announces = announces.exchange(0);
+
+			int ms = duration_cast<milliseconds>(now - start).count();
+
+			printf("connects/s: %u announces/s: %u\n"
+				, last_connects * 1000 / ms
+				, last_announces * 1000 / ms);
+			start = now;
+		}
 	}
 
 	clock::time_point end = clock::now();
