@@ -165,9 +165,9 @@ int main(int argc, char* argv[])
 		uint32_t last_bytes_in = bytes_in.exchange(0);
 		uint32_t last_bytes_out = bytes_out.exchange(0);
 		uint32_t last_dropped = dropped.exchange(0);
-		printf("c: %u a: %u s: %u e: %u d: %u in: %u kB out: %u kB\n"
+		printf("c: %u a: %u s: %u e: %u d: %u in: %u kB/s out: %u kB/s\n"
 			, last_connects / 10, last_announces / 10, last_scrapes / 10, last_errors / 10
-			, last_dropped / 10, last_bytes_in / 1000, last_bytes_out / 1000);
+			, last_dropped / 10, last_bytes_in / 10000, last_bytes_out / 10000);
 		keys.tick();
 	}
 
