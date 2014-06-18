@@ -176,7 +176,7 @@ bool packet_socket::send(packet_buffer& packets)
 
 	if (m_send_cursor + packets.m_send_cursor > m_send_buffer.size())
 	{
-		fprintf(stderr, "send: packet buffer too large (dropping %d kiB)\n"
+		printf("(dropping %d kiB)\n"
 			, packets.m_send_cursor / 1024);
 		packets.m_send_cursor = 0;
 		return false;
@@ -223,6 +223,11 @@ bool packet_buffer::append_impl(iovec const* v, int num
 
 	int len = 0;
 
+#ifdef USE_SYSTEM_SEND_SOCKET
+	memcpy(ptr, to, sizeof(sockaddr_in));
+	ptr += sizeof(sockaddr_in);
+	len += sizeof(sockaddr_in);
+#else
 	switch (m_link_layer)
 	{
 		case DLT_NULL:
@@ -307,6 +312,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 
 	ptr += 8;
 	len += 8;
+#endif
 
 	for (int i = 0; i < num; ++i)
 	{
@@ -443,6 +449,51 @@ void packet_socket::send_thread()
 	local_buffer.resize(send_buffer_size);
 	int end;
 
+#ifdef USE_SYSTEM_SEND_SOCKET
+	// socket used for sending
+	int sock = socket(PF_INET, SOCK_DGRAM, 0);
+	if (sock < 0)
+	{
+		fprintf(stderr, "failed to open send socket (%d): %s\n"
+			, errno, strerror(errno));
+		exit(1);
+	}
+	int one = 1;
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEADDR on send socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+
+#ifdef SO_REUSEPORT
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0)
+	{
+		fprintf(stderr, "failed to set SO_REUSEPORT on send socket (%d): %s\n"
+			, errno, strerror(errno));
+	}
+#endif
+	sockaddr_in bind_addr;
+	memset(&bind_addr, 0, sizeof(bind_addr));
+	bind_addr.sin_family = AF_INET;
+	bind_addr.sin_addr.s_addr = INADDR_ANY;
+	bind_addr.sin_port = m_our_addr.sin_port;
+	int r = bind(sock, (sockaddr*)&bind_addr, sizeof(bind_addr));
+	if (r < 0)
+	{
+		fprintf(stderr, "failed to bind send socket to port %d (%d): %s\n"
+			, ntohs(m_our_addr.sin_port), errno, strerror(errno));
+		exit(1);
+	}
+
+	int opt = socket_buffer_size;
+	r = setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &opt, sizeof(opt));
+	if (r == -1)
+	{
+		fprintf(stderr, "failed to set send socket buffer size (%d): %s\n"
+			, errno, strerror(errno));
+	}
+#endif
+
 	// exponential back-off. The more read operations that return
 	// no packets, the longer we wait until we read again. This
 	// balances CPU usage when idle with wasting less time when busy
@@ -484,16 +535,31 @@ void packet_socket::send_thread()
 			i += 2;
 			assert(local_buffer.size() - i >= len);
 
+#ifdef USE_SYSTEM_SEND_SOCKET
+			assert(len >= sizeof(sockaddr_in));
+			sockaddr_in* to = (sockaddr_in*)(local_buffer.data() + i);
+			int r = sendto(sock
+				, local_buffer.data() + i + sizeof(sockaddr_in)
+				, len - sizeof(sockaddr_in), 0, (sockaddr*)to, sizeof(sockaddr_in));
+			if (r == -1)
+				fprintf(stderr, "sendto() = %d \"%s\"\n", r
+					, strerror(errno));
+#else
 			int r = pcap_sendpacket(m_pcap, local_buffer.data() + i
 				, len);
 
 			if (r == -1)
 				fprintf(stderr, "pcap_sendpacket() = %d \"%s\"\n", r
 					, pcap_geterr(m_pcap));
+#endif
 
 			i += len;
 		}
 	}
+
+#ifdef USE_SYSTEM_SEND_SOCKET
+	::close(sock);
+#endif
 }
 
 // fills in the in_packets array with incoming packets. Returns the number filled in

@@ -6,9 +6,11 @@ install stage : utrack : <location>. ;
 explicit stage-test ;
 explicit stage ;
 
-feature libpcap : off on : composite propagated link-incompatible ;
+feature pcap : off on receive-only : composite propagated link-incompatible ;
+feature.compose <pcap>on : <define>USE_PCAP ;
+feature.compose <pcap>receive-only : <define>USE_PCAP <define>USE_SYSTEM_SEND_SOCKET ;
 
-lib pcap : : <name>pcap : <search>/opt/local/lib : <include>/opt/local/include <define>USE_PCAP ;
+lib pcap : : <name>pcap : <search>/opt/local/lib : <include>/opt/local/include ;
 
 exe utrack
 	:
@@ -19,9 +21,11 @@ exe utrack
 	key_rotate.cpp
 	receive_thread.cpp
 	:
-	<libpcap>on:<library>pcap
-	<libpcap>on:<source>socket_pcap.cpp
-	<libpcap>off:<source>socket_system.cpp
+	<pcap>on:<library>pcap
+	<pcap>receive-only:<library>pcap
+	<pcap>on:<source>socket_pcap.cpp
+	<pcap>receive-only:<source>socket_pcap.cpp
+	<pcap>off:<source>socket_system.cpp
 	;
 
 exe udp_test : socket_pcap.cpp test_announce.cpp : <library>pcap ;

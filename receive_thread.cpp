@@ -183,7 +183,9 @@ void receive_thread::incoming_packet(char const* buf, int size
 		{
 			if (!verify_connection_id(hdr->connection_id, from))
 			{
-				printf("invalid connection ID\n");
+				uint8_t const* addr = (uint8_t const*)&from->sin_addr.s_addr;
+				printf("invalid connection ID (%d.%d.%d.%d:%u)\n"
+					, addr[0], addr[1], addr[2], addr[3], ntohs(from->sin_port));
 				++errors;
 				// log error
 				return;

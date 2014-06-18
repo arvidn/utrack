@@ -204,7 +204,11 @@ int main(int argc, char* argv[])
 	}
 	to.sin_port = htons(atoi(argv[3]));
 
+#ifdef USE_SYSTEM_SEND_SOCKET
+	packet_socket sock(argv[1], 14334);
+#else
 	packet_socket sock(argv[1], 0);
+#endif
 	packet_buffer send_buffer(sock);
 
 	g_sock = &sock;
