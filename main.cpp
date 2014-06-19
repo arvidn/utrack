@@ -51,8 +51,6 @@ Copyright (C) 2010-2013  Arvid Norberg
 
 int interval = default_interval;
 
-int listen_port = 8080;
-
 // set to true when we're shutting down
 volatile bool quit = false;
 
@@ -75,9 +73,32 @@ void sigint(int s)
 	quit = true;
 }
 
+void print_usage()
+{
+	printf("usage: utrack device [port]\n\n"
+		"device       the network device to listen on\n"
+		"port         the UDP port to listen on (defaults to 80)\n"
+		);
+	exit(1);
+}
+
 int main(int argc, char* argv[])
 {
-	fprintf(stderr, "listening on UDP port %d\n", listen_port);
+	if (argc > 3 || argc < 2) print_usage();
+
+	int listen_port = 80;
+	if (argc > 2)
+		listen_port = atoi(argv[2]);
+
+	if (listen_port == 0)
+	{
+		fprintf(stderr, "cannot listen on port 0\n");
+		exit(1);
+	}
+
+	char const* device = argv[1];
+	fprintf(stderr, "listening on UDP port %d on device %s\n"
+		, listen_port, device);
 	
 	std::vector<announce_thread*> announce_threads;
 	std::vector<receive_thread*> receive_threads;
@@ -103,7 +124,7 @@ int main(int argc, char* argv[])
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 
 #ifdef USE_PCAP
-	packet_socket socket("lo0", listen_port);
+	packet_socket socket(device, listen_port);
 #endif
 
 	// create threads. We should create the same number of

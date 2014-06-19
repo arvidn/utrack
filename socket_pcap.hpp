@@ -34,7 +34,10 @@ enum {
 struct packet_buffer;
 
 struct address_eth
-{ uint8_t addr[6]; };
+{
+	address_eth() { memset(addr, 0, sizeof(addr)); }
+	uint8_t addr[6];
+};
 
 struct packet_socket
 {
