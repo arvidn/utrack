@@ -32,6 +32,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <net/if.h> // for ifreq
 #include <sys/sockio.h> // for SIOCGIFADDR
 #include <sys/ioctl.h>
+#include <net/if_dl.h> // for sockaddr_dl
 
 #include <atomic>
 #include <mutex>
@@ -89,34 +90,30 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (r == -1)
 		fprintf(stderr, "pcap_setdirection() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
-	if (listen_port != 0)
+	ifreq req;
+	strncpy(req.ifr_name, device, IFNAMSIZ);
+	int s = socket(AF_INET, SOCK_DGRAM, 0);
+	if (s < 0)
 	{
-		ifreq req;
-		strncpy(req.ifr_name, device, IFNAMSIZ);
-		int s = socket(AF_INET, SOCK_DGRAM, 0);
-		if (s < 0)
+		fprintf(stderr, "socket() = %d \"%s\"\n", r, strerror(errno));
+		exit(-1);
+	}
+	r = ioctl(s, SIOCGIFADDR, &req);
+	::close(s);
+
+	if (r == 0)
+	{
+		sockaddr_in* our_ip = (sockaddr_in*)&req.ifr_addr;
+		if (our_ip->sin_family != AF_INET)
 		{
-			fprintf(stderr, "socket() = %d \"%s\"\n", r, strerror(errno));
+			fprintf(stderr, "device \"%s\" is not supported\n", device);
 			exit(-1);
 		}
-		r = ioctl(s, SIOCGIFADDR, &req);
-		::close(s);
-
-		if (r == 0)
-		{
-			sockaddr_in* our_ip = (sockaddr_in*)&req.ifr_addr;
-			if (our_ip->sin_family != AF_INET)
-			{
-				fprintf(stderr, "device \"%s\" is not supported\n", device);
-				exit(-1);
-			}
-			m_our_addr = *our_ip;
-		}
-		else
-			fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
+		m_our_addr = *our_ip;
 	}
 	else
 	{
+		fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
 		m_our_addr.sin_addr.s_addr = 0;
 	}
 
@@ -128,6 +125,35 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		, (host_ip >> 16) & 0xff
 		, (host_ip >> 8) & 0xff
 		, host_ip & 0xff);
+
+	pcap_if_t *alldevs;
+	r = pcap_findalldevs(&alldevs, error_msg);
+	if (r != 0)
+	{
+		printf("pcap_findalldevs() = %d \"%s\"\n", r, error_msg);
+		exit(1);
+	}
+
+	for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
+	{
+		if (strcmp(d->name, device) != 0) continue;
+		for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
+		{
+			if (a->addr->sa_family != AF_LINK || a->addr->sa_data == nullptr)
+				continue;
+
+			sockaddr_dl* link = (struct sockaddr_dl*)a->addr;
+
+			memcpy(m_eth_addr.addr, LLADDR(link), 6);
+			break;
+		}
+	}
+	pcap_freealldevs(alldevs);
+
+	printf("ethernet: ");
+	for (int i = 0; i< 6; i++)
+		printf(&":%02x"[i == 0], uint8_t(m_eth_addr.addr[i]));
+	printf("\n");
 
 	pcap_activate(m_pcap);
 
@@ -236,6 +262,22 @@ bool packet_buffer::append_impl(iovec const* v, int num
 			memcpy(ptr, &proto, 4);
 			ptr += 4;
 			len += 4;
+			break;
+		}
+		case DLT_EN10MB:
+		{
+			// TODO: figure out how to fill in the destination MAC
+			// destination MAC address
+			memset(ptr, 0, 6);
+			// source MAC address
+			memcpy(ptr + 6, m_eth_from.addr, 6);
+			// ethertype (upper layer protocol)
+			// 0x0800 = IPv4
+			// 0x86dd = IPv6
+			ptr[12] = 0x08;
+			ptr[13] = 0x00;
+			ptr += 14;
+			len += 14;
 			break;
 		}
 		default:
@@ -577,6 +619,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	switch (m_link_layer)
 	{
 		case DLT_NULL: st.link_header_size = 4; break;
+		case DLT_EN10MB: st.link_header_size = 14; break;
 		default:
 			assert(false);
 	}

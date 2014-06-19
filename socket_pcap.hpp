@@ -33,6 +33,9 @@ enum {
 
 struct packet_buffer;
 
+struct address_eth
+{ uint8_t addr[6]; };
+
 struct packet_socket
 {
 	friend struct packet_buffer;
@@ -60,6 +63,7 @@ private:
 	std::array<uint64_t, receive_buffer_size> m_buffer;
 
 	sockaddr_in m_our_addr;
+	address_eth m_eth_addr;
 
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
@@ -89,6 +93,7 @@ struct packet_buffer
 		: m_link_layer(s.m_link_layer)
 		, m_send_cursor(0)
 		, m_from(s.m_our_addr)
+		, m_eth_from(s.m_eth_addr)
 		, m_buf(0x100000)
 	{}
 
@@ -101,7 +106,7 @@ private:
 	int m_link_layer;
 	int m_send_cursor;
 	sockaddr_in m_from;
-	// TODO: we need from-MAC address too
+	address_eth m_eth_from;
 	std::vector<uint8_t> m_buf;
 };
 
