@@ -26,8 +26,11 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <cstdlib> // for rand()
 
 #include <signal.h>
+
+#ifndef _WIN32
 #include <unistd.h>
 #include <netinet/in.h>
+#endif
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -69,6 +72,7 @@ announce_thread::announce_thread(int listen_port)
 
 void announce_thread::thread_fun()
 {
+#ifndef _WIN32
 	sigset_t sig;
 	sigfillset(&sig);
 	int r = pthread_sigmask(SIG_BLOCK, &sig, NULL);
@@ -76,6 +80,7 @@ void announce_thread::thread_fun()
 	{
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
+#endif
 
 	// this is the queue the other one is swapped into
 	// and then drained without needing to hold the mutex

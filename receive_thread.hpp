@@ -23,8 +23,12 @@ Copyright (C) 2010-201$  Arvid Norberg
 #include <cstdint>
 #include <vector>
 
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
+#else
+#include <winsock2.h>
+#endif
 
 #include "socket.hpp"
 #include "announce_thread.hpp" // for announce_msg

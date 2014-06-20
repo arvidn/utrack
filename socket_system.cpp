@@ -23,9 +23,14 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <errno.h> // for errno
 #include <string.h> // for strerror
 #include <stdlib.h> // for exit
+#include <fcntl.h> // for F_GETFL and F_SETFL
+
+#ifndef _WIN32
 #include <unistd.h> // for close
 #include <poll.h> // for poll
-#include <fcntl.h> // for F_GETFL and F_SETFL
+#else
+#include <winsock2.h>
+#endif
 
 #include <atomic>
 #include <assert.h>
@@ -50,7 +55,8 @@ packet_socket::packet_socket(int listen_port, bool receive)
 	}
 
 	int opt = socket_buffer_size;
-	int r = setsockopt(m_socket, SOL_SOCKET, m_receive ? SO_RCVBUF : SO_SNDBUF, &opt, sizeof(opt));
+	int r = setsockopt(m_socket, SOL_SOCKET, m_receive ? SO_RCVBUF : SO_SNDBUF
+		, (char const*)&opt, sizeof(opt));
 	if (r == -1)
 	{
 		fprintf(stderr, "failed to set socket %s buffer size (%d): %s\n"
@@ -58,7 +64,8 @@ packet_socket::packet_socket(int listen_port, bool receive)
 	}
 
 	int one = 1;
-	if (setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0)
+	if (setsockopt(m_socket, SOL_SOCKET, SO_REUSEADDR
+		, (char const*)&one, sizeof(one)) < 0)
 	{
 		fprintf(stderr, "failed to set SO_REUSEADDR on socket (%d): %s\n"
 			, errno, strerror(errno));
@@ -89,6 +96,16 @@ packet_socket::packet_socket(int listen_port, bool receive)
 			exit(1);
 		}
 
+#ifdef _WIN32
+		unsigned long one = 1;
+		r = ioctlsocket(m_socket, FIONBIO, &one);
+		if (r < 0)
+		{
+			fprintf(stderr, "failed to set non-blocking mode (%d): %s\n"
+				, errno, strerror(errno));
+			exit(1);
+		}
+#else
 		int flags = fcntl(m_socket, F_GETFL, 0);
 		if (flags < 0)
 		{
@@ -104,6 +121,7 @@ packet_socket::packet_socket(int listen_port, bool receive)
 				, errno, strerror(errno));
 			exit(1);
 		}
+#endif
 	}
 }
 
@@ -135,6 +153,27 @@ bool packet_socket::send(packet_buffer& packets)
 // send a packet and retry on EINTR
 bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 {
+#ifdef _WIN32
+	// windows doesn't support the msghdr
+	char buf[1500];
+	char const* ptr = buf;
+	int len = 0;
+	if (num == 1)
+	{
+		ptr = v->iov_base;
+		len = v->iov_len;
+	}
+	else
+	{
+		for (int i = 0; i < num; ++i)
+		{
+			memcpy(ptr, v[i].iov_base, v[i].iov_len);
+			ptr += v[i].iov_len;
+			len += v[i].iov_len;
+		}
+		ptr = buf;
+	}
+#else
 	msghdr msg;
 	msg.msg_name = (void*)to;
 	msg.msg_namelen = sizeof(sockaddr_in);
@@ -143,11 +182,15 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 	msg.msg_control = 0;
 	msg.msg_controllen = 0;
 	msg.msg_flags = 0;
-
+#endif
 	// loop just to deal with the potential EINTR
 	do
 	{
+#ifdef _WIN32
+		int r = sendto(m_socket, ptr, len, 0, to, sizeof(sockaddr_in));
+#else
 		int r = sendmsg(m_socket, &msg, MSG_NOSIGNAL);
+#endif
 		if (r == -1)
 		{
 			if (errno == EINTR) continue;

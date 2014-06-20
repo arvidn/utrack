@@ -25,8 +25,16 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <array>
 #include <mutex>
 
+#ifndef _WIN32
 #include <netinet/in.h> // for sockaddr
 #include <sys/socket.h> // for iovec
+#else
+#include <winsock2.h>
+struct iovec {
+	void* iov_base;
+	int iov_len;
+};
+#endif
 
 struct incoming_packet_t
 {

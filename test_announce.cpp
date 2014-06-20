@@ -17,20 +17,23 @@ Copyright (C) 2010-2014 Arvid Norberg
 */
 
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/errno.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <openssl/sha.h>
-#include <unistd.h>
 #include <signal.h>
-#include <pthread.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/socket.h>
+#include <sys/errno.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#else
+#include <winsock2.h>
+#endif
 
 #include "messages.hpp"
 #include "endian.hpp"

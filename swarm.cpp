@@ -2,6 +2,11 @@
 #include <assert.h>
 #include <iterator>
 #include <stdio.h>
+#include <algorithm> // for min, max
+
+#ifdef _WIN32
+#include <winsock2.h> // for ntohl
+#endif
 
 #include "config.hpp"
 
@@ -9,7 +14,7 @@ swarm::swarm()
 	: m_seeds(0)
 	, m_downloaders(0)
 	, m_download_count(0)
-	, m_last_announce(steady_clock::time_point::min())
+	, m_last_announce((steady_clock::time_point::min)())
 {
 	m_last_purge = m_peers4.end();
 }

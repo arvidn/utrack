@@ -93,6 +93,7 @@ void receive_thread::close()
 
 void receive_thread::thread_fun()
 {
+#ifndef _WIN32
 	sigset_t sig;
 	sigfillset(&sig);
 	int r = pthread_sigmask(SIG_BLOCK, &sig, NULL);
@@ -100,6 +101,7 @@ void receive_thread::thread_fun()
 	{
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
+#endif
 
 #ifdef USE_PCAP
 	packet_buffer send_buffer(m_sock);

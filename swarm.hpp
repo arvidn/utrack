@@ -1,7 +1,6 @@
 #ifndef _SWARM_HPP_
 #define _SWARM_HPP_
 
-#include <netinet/in.h>
 #include <time.h>
 #include <vector>
 #include <thread>
@@ -35,7 +34,7 @@ struct peer_ip4
 
 struct peer_entry
 {
-	peer_entry(): index(0), complete(false), downloading(true), key(0), last_announce(steady_clock::time_point::min()) {}
+	peer_entry(): index(0), complete(false), downloading(true), key(0), last_announce((steady_clock::time_point::min)()) {}
 	// index into the compact array of IPs
 	uint32_t index:30;
 	// true if we've received complete from this peer

@@ -17,13 +17,20 @@ Copyright (C) 2010-2013  Arvid Norberg
 */
 
 #include <sys/types.h>
+#include <signal.h>
+
+#ifdef __linux__
+#include <pthread.h>
+#endif
+
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <sys/errno.h>
 #include <netinet/in.h>
-#include <openssl/sha.h>
 #include <unistd.h>
-#include <signal.h>
-#include <pthread.h>
+#else
+#include <winsock2.h>
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -106,6 +113,7 @@ int main(int argc, char* argv[])
 	int num_cores = std::thread::hardware_concurrency();
 	if (num_cores == 0) num_cores = 4;
 
+#ifndef _WIN32
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = &sigint;
@@ -122,6 +130,9 @@ int main(int argc, char* argv[])
 		quit = true;
 	}
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
+#else
+#warning TODO: install windows ctrl-C handler
+#endif
 
 #ifdef USE_PCAP
 	packet_socket socket(device, listen_port);

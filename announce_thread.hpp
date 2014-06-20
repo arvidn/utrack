@@ -23,10 +23,15 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include "swarm.hpp"
 #include "socket.hpp"
 
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
+#else
+#include <winsock2.h>
+#endif
 
 #include <thread>
+#include <condition_variable>
 #include <queue>
 #include <unordered_map>
 #include <array>
