@@ -176,14 +176,18 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (r == -1)
 		fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
+#ifndef USE_WINPCAP
 	for (int i = 0; i < 3; ++i)
 		m_send_threads.emplace_back(&packet_socket::send_thread, this);
+#endif
 }
 
 packet_socket::~packet_socket()
 {
 	close();
+#ifndef USE_WINPCAP
 	for (auto& t : m_send_threads) t.join();
+#endif
 	if (m_pcap) pcap_close(m_pcap);
 }
 
@@ -196,6 +200,11 @@ void packet_socket::close()
 
 bool packet_socket::send(packet_buffer& packets)
 {
+#ifdef USE_WINPCAP
+	int r = pcap_sendqueue_transmit(m_pcap, m_queue, 0);
+	if (r < 0)
+		fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+#else
 	std::lock_guard<std::mutex> l(m_mutex);
 
 	if (packets.m_send_cursor == 0) return true;
@@ -215,7 +224,30 @@ bool packet_socket::send(packet_buffer& packets)
 
 	m_send_cursor += packets.m_send_cursor;
 	packets.m_send_cursor = 0;
+#endif
 	return true;
+}
+
+packet_buffer::packet_buffer(packet_socket& s)
+	: m_link_layer(s.m_link_layer)
+#ifndef USE_WINPCAP
+	, m_send_cursor(0)
+#endif
+	, m_from(s.m_our_addr)
+	, m_eth_from(s.m_eth_addr)
+#ifdef USE_WINPCAP
+	, m_queue(pcap_sendqueue_alloc(0x100000))
+	, m_pcap(s.m_pcap)
+#else
+	, m_buf(0x100000)
+#endif
+{}
+
+packet_buffer::~packet_buffer()
+{
+#ifdef USE_WINPCAP
+	pcap_sendqueue_destroy(m_queue);
+#endif
 }
 
 bool packet_buffer::append(iovec const* v, int num
@@ -242,12 +274,18 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		return false;
 	}
 
+#ifdef USE_WINPCAP
+	std::uint8_t buffer[1500];
+	std::uint8_t* ptr = buffer;
+	int len = 0;
+#else
 	std::uint8_t* ptr = &m_buf[m_send_cursor];
 
 	std::uint8_t* prefix = ptr;
 	ptr += 2;
 
 	int len = 0;
+#endif
 
 #ifdef USE_SYSTEM_SEND_SOCKET
 	memcpy(ptr, to, sizeof(sockaddr_in));
@@ -327,7 +365,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 	// to addr
 	memcpy(ip_header + 16, &to->sin_addr.s_addr, 4);
 
-	// calculate the checksum
+	// calculate the IP checksum
 	std::uint16_t chk = 0;
 	for (int i = 0; i < 20; i += 2)
 	{
@@ -364,10 +402,18 @@ bool packet_buffer::append_impl(iovec const* v, int num
 	}
 
 	assert(len <= 1500);
+#ifdef USE_WINPCAP
+	pcap_pkthdr hdr;
+	hdr.caplen = len;
+	hdr.len = len;
+	memset(&hdr.ts, 0, sizeof(hdr.ts));
+	int r = pcap_sendqueue_queue(m_queue, &hdr, buffer);
+#else
 	prefix[0] = (len >> 8) & 0xff;
 	prefix[1] = len & 0xff;
 
 	m_send_cursor += len + 2;
+#endif
 
 	return true;
 }

@@ -68,6 +68,7 @@ private:
 	sockaddr_in m_our_addr;
 	address_eth m_eth_addr;
 
+#ifndef USE_WINPCAP
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
 
@@ -84,6 +85,7 @@ private:
 
 	// the thread that's used to send the packets put in the send queue
 	std::vector<std::thread> m_send_threads;
+#endif
 };
 
 // TODO: WinPcap has a much more efficient bulk-sending API which would be
@@ -92,13 +94,8 @@ struct packet_buffer
 {
 	friend struct packet_socket;
 
-	explicit packet_buffer(packet_socket& s)
-		: m_link_layer(s.m_link_layer)
-		, m_send_cursor(0)
-		, m_from(s.m_our_addr)
-		, m_eth_from(s.m_eth_addr)
-		, m_buf(0x100000)
-	{}
+	explicit packet_buffer(packet_socket& s);
+	~packet_buffer();
 
 	bool append(iovec const* v, int num, sockaddr_in const* to);
 
@@ -107,9 +104,16 @@ struct packet_buffer
 
 private:
 	int m_link_layer;
+#ifndef USE_WINPCAP
 	int m_send_cursor;
+#endif
 	sockaddr_in m_from;
 	address_eth m_eth_from;
+#ifdef USE_WINPCAP
+	pcap_send_queue m_queue;
+	pcap_t* m_pcap;
+#else
 	std::vector<uint8_t> m_buf;
+#endif
 };
 
