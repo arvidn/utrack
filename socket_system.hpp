@@ -7,7 +7,7 @@ struct packet_socket
 {
 	friend struct packet_buffer;
 
-	explicit packet_socket(bool receive = false);
+	packet_socket(int listen_port, bool receive = false);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
 	packet_socket(packet_socket const&) = delete;
@@ -34,7 +34,7 @@ struct packet_buffer
 		: m_socket(s.m_socket)
 	{}
 
-	bool append(iovec const* v, int num, sockaddr const* to, socklen_t tolen);
+	bool append(iovec const* v, int num, sockaddr_in const* to);
 
 private:
 	int m_socket;

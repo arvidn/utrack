@@ -58,8 +58,6 @@ struct packet_socket
 
 private:
 
-	void send_thread();
-
 	pcap_t* m_pcap;
 	int m_link_layer;
 	std::atomic<uint32_t> m_closed;
@@ -69,6 +67,8 @@ private:
 	address_eth m_eth_addr;
 
 #ifndef USE_WINPCAP
+	void send_thread();
+
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
 

@@ -138,7 +138,7 @@ int main(int argc, char* argv[])
 #ifdef USE_PCAP
 		announce_threads.push_back(new announce_thread(socket));
 #else
-		announce_threads.push_back(new announce_thread);
+		announce_threads.push_back(new announce_thread(listen_port));
 #endif
 
 #if defined __linux__
@@ -161,7 +161,7 @@ int main(int argc, char* argv[])
 #ifdef USE_PCAP
 		receive_threads.push_back(new receive_thread(socket, announce_threads));
 #else
-		receive_threads.push_back(new receive_thread(announce_threads));
+		receive_threads.push_back(new receive_thread(listen_port, announce_threads));
 #endif
 
 #if defined __linux__

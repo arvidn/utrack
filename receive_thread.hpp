@@ -38,7 +38,7 @@ struct receive_thread
 #ifdef USE_PCAP
 	receive_thread(packet_socket& s, std::vector<announce_thread*> const& at);
 #else
-	receive_thread(std::vector<announce_thread*> const& at);
+	receive_thread(int listen_port, std::vector<announce_thread*> const& at);
 #endif
 	~receive_thread();
 

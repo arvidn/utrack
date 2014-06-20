@@ -37,7 +37,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 extern std::atomic<uint32_t> bytes_out;
 
 
-packet_socket::packet_socket(bool receive)
+packet_socket::packet_socket(int listen_port, bool receive)
 	: m_socket(-1)
 	, m_receive(receive)
 {
@@ -71,8 +71,6 @@ packet_socket::packet_socket(bool receive)
 			, errno, strerror(errno));
 	}
 #endif
-
-	extern int listen_port;
 
 	// we cannot bind the sockets meant for just outgoing packets to the
 	// IP and port, since then they will swallow incoming packets
@@ -122,6 +120,7 @@ void packet_socket::close()
 
 packet_socket::packet_socket(packet_socket&& s)
 	: m_socket(s.m_socket)
+	, m_receive(s.m_receive)
 {
 	s.m_socket = -1;
 }
@@ -134,11 +133,11 @@ bool packet_socket::send(packet_buffer& packets)
 }
 
 // send a packet and retry on EINTR
-bool packet_buffer::append(iovec const* v, int num, sockaddr const* to, socklen_t tolen)
+bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 {
 	msghdr msg;
 	msg.msg_name = (void*)to;
-	msg.msg_namelen = tolen;
+	msg.msg_namelen = sizeof(sockaddr_in);
 	msg.msg_iov = (iovec*)v;
 	msg.msg_iovlen = num;
 	msg.msg_control = 0;
@@ -228,7 +227,6 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 		}
 
 		memcpy(&in_packets->from, &from, sizeof(from));
-		in_packets->fromlen = fromlen;
 		in_packets->buffer = (char*)m_buffer.data();
 		in_packets->buflen = size;
 		break;

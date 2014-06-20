@@ -70,7 +70,7 @@ struct announce_thread
 #ifdef USE_PCAP
 	announce_thread(packet_socket& s);
 #else
-	announce_thread();
+	announce_thread(int listen_port);
 #endif
 
 	// allow move

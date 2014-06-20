@@ -6,12 +6,14 @@ install stage : utrack : <location>. ;
 explicit stage-test ;
 explicit stage ;
 
-feature pcap : off on win receive-only : composite propagated link-incompatible ;
-feature.compose <pcap>on : <define>USE_PCAP ;
-feature.compose <pcap>win : <define>USE_PCAP <define>USE_WINPCAP ;
-feature.compose <pcap>receive-only : <define>USE_PCAP <define>USE_SYSTEM_SEND_SOCKET ;
+lib libpcap : : <name>pcap : <search>/opt/local/lib
+	: <include>/opt/local/include <define>USE_PCAP ;
 
-lib pcap : : <name>pcap : <search>/opt/local/lib : <include>/opt/local/include ;
+exe udp_test : socket_pcap.cpp test_announce.cpp : <library>libpcap ;
+
+feature pcap : off on win receive-only : composite propagated link-incompatible ;
+feature.compose <pcap>win : <define>USE_WINPCAP ;
+feature.compose <pcap>receive-only : <define>USE_SYSTEM_SEND_SOCKET ;
 
 exe utrack
 	:
@@ -22,12 +24,12 @@ exe utrack
 	key_rotate.cpp
 	receive_thread.cpp
 	:
-	<pcap>on:<library>pcap
-	<pcap>receive-only:<library>pcap
+	<pcap>on:<library>libpcap
+	<pcap>win:<library>libpcap
+	<pcap>receive-only:<library>libpcap
 	<pcap>on:<source>socket_pcap.cpp
 	<pcap>receive-only:<source>socket_pcap.cpp
+	<pcap>win:<source>socket_pcap.cpp
 	<pcap>off:<source>socket_system.cpp
 	;
-
-exe udp_test : socket_pcap.cpp test_announce.cpp : <library>pcap ;
 

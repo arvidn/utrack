@@ -50,9 +50,13 @@ extern std::atomic<uint32_t> bytes_out;
 packet_socket::packet_socket(char const* device, int listen_port)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
+#ifndef USE_WINPCAP
 	, m_send_cursor(0)
+#endif
 {
+#ifndef USE_WINPCAP
 	m_send_buffer.resize(send_buffer_size);
+#endif
 
 	char error_msg[PCAP_ERRBUF_SIZE];
 	m_pcap = pcap_create(device, error_msg);
@@ -268,17 +272,17 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		return false;
 	}
 
+#ifdef USE_WINPCAP
+	std::uint8_t buffer[1500];
+	std::uint8_t* ptr = buffer;
+	int len = 0;
+#else
 	if (m_send_cursor + buf_size + 28 + 30 > m_buf.size())
 	{
 		fprintf(stderr, "packet buffer full\n");
 		return false;
 	}
 
-#ifdef USE_WINPCAP
-	std::uint8_t buffer[1500];
-	std::uint8_t* ptr = buffer;
-	int len = 0;
-#else
 	std::uint8_t* ptr = &m_buf[m_send_cursor];
 
 	std::uint8_t* prefix = ptr;
@@ -531,6 +535,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	}
 }
 
+#ifndef USE_WINPCAP
 void packet_socket::send_thread()
 {
 	std::vector<uint8_t> local_buffer;
@@ -649,6 +654,7 @@ void packet_socket::send_thread()
 	::close(sock);
 #endif
 }
+#endif // !USE_WINPCAP
 
 // fills in the in_packets array with incoming packets. Returns the number filled in
 int packet_socket::receive(incoming_packet_t* in_packets, int num)

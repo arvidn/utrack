@@ -68,9 +68,10 @@ receive_thread::receive_thread(packet_socket& s
 
 #else
 
-receive_thread::receive_thread(std::vector<announce_thread*> const& at)
-	: m_sock(true)
-	, m_send_sock()
+receive_thread::receive_thread(int listen_port
+	, std::vector<announce_thread*> const& at)
+	: m_sock(listen_port, true)
+	, m_send_sock(listen_port)
 	, m_announce_threads(at)
 	, m_thread( [=]() { thread_fun(); } ) {}
 

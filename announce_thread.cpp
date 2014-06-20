@@ -58,8 +58,8 @@ announce_thread::announce_thread(packet_socket& s)
 	m_queue.reserve(announce_queue_size);
 }
 #else
-announce_thread::announce_thread()
-	: m_sock()
+announce_thread::announce_thread(int listen_port)
+	: m_sock(listen_port)
 	, m_quit(false)
 	, m_thread( [=]() { thread_fun(); } )
 {
