@@ -27,6 +27,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 #ifdef _WIN32
 #include <winsock2.h>
+#define snprintf _snprintf
 #else
 #include <unistd.h> // for close
 #include <poll.h> // for poll
@@ -43,8 +44,6 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <mutex>
 #include <chrono>
 #include <thread>
-
-#include <pcap/pcap.h>
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -99,6 +98,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (r == -1)
 		fprintf(stderr, "pcap_setdirection() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
+#ifndef _WIN32
 	ifreq req;
 	strncpy(req.ifr_name, device, IFNAMSIZ);
 	int s = socket(AF_INET, SOCK_DGRAM, 0);
@@ -125,6 +125,16 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
 		m_our_addr.sin_addr.s_addr = 0;
 	}
+#else
+	uint32_t ip = 0;
+	uint32_t mask = 0;
+	r = pcap_lookupnet(device, &ip, &mask, error_msg);
+	if (r != 0)
+	{
+		printf("pcap_lookupnet() = %d \"%s\"\n", r, error_msg);
+	}
+	m_our_addr.sin_addr.s_addr = htonl(ip);
+#endif
 
 	m_our_addr.sin_port = htons(listen_port);
 
@@ -134,7 +144,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		, (host_ip >> 16) & 0xff
 		, (host_ip >> 8) & 0xff
 		, host_ip & 0xff);
-
+/*
 	pcap_if_t *alldevs;
 	r = pcap_findalldevs(&alldevs, error_msg);
 	if (r != 0)
@@ -163,7 +173,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	for (int i = 0; i< 6; i++)
 		printf(&":%02x"[i == 0], uint8_t(m_eth_addr.addr[i]));
 	printf("\n");
-
+*/
 	pcap_activate(m_pcap);
 
 	m_link_layer = pcap_datalink(m_pcap);
@@ -177,7 +187,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (listen_port == 0) format_string = "udp";
 	snprintf(program_text, sizeof(program_text), format_string, listen_port);
 	bpf_program p;
-	r = pcap_compile(m_pcap, &p, program_text, 1, PCAP_NETMASK_UNKNOWN);
+	r = pcap_compile(m_pcap, &p, program_text, 1, 0xffffffff);
 	if (r == -1)
 		fprintf(stderr, "pcap_compile() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
@@ -210,7 +220,7 @@ void packet_socket::close()
 bool packet_socket::send(packet_buffer& packets)
 {
 #ifdef USE_WINPCAP
-	int r = pcap_sendqueue_transmit(m_pcap, m_queue, 0);
+	int r = pcap_sendqueue_transmit(m_pcap, packets.m_queue, 0);
 	if (r < 0)
 		fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 #else
@@ -523,7 +533,9 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// copy from IP header
 	memset(&pkt.from, 0, sizeof(pkt.from));
 	sockaddr_in* from = (sockaddr_in*)&pkt.from;
+#ifndef _WIN32
 	from->sin_len = sizeof(sockaddr_in);
+#endif
 	from->sin_family = AF_INET;
 	// UDP header: src-port, dst-port, len, chksum
 	memcpy(&from->sin_port, udp_header, 2);

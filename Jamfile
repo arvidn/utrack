@@ -22,19 +22,20 @@ rule pcap ( properties * )
 	if <pcap>off in $(properties)
 	{
 		result += <source>socket_system.cpp ;
-		return $(result) ;
-	}
-
-	if <target-os>windows in $(properties)
-	{
-		result += <library>libwpcap ;
 	}
 	else
 	{
-		result += <library>libpcap ;
-	}
+		if <target-os>windows in $(properties)
+		{
+			result += <library>libwpcap ;
+		}
+		else
+		{
+			result += <library>libpcap ;
+		}
 
-	result += <source>socket_pcap.cpp ;
+		result += <source>socket_pcap.cpp ;
+	}
 	return $(result) ;
 }
 

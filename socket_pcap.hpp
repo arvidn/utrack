@@ -16,7 +16,15 @@ Copyright (C) 2013-2014 Arvid Norberg
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#ifndef SOCKET_PCAP_HPP
+#define SOCKET_PCAP_HPP
+
 #include <pcap/pcap.h>
+
+#ifdef USE_WINPCAP
+#include <win32-extensions.h>
+#endif
+
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -110,10 +118,12 @@ private:
 	sockaddr_in m_from;
 	address_eth m_eth_from;
 #ifdef USE_WINPCAP
-	pcap_send_queue m_queue;
+	pcap_send_queue* m_queue;
 	pcap_t* m_pcap;
 #else
 	std::vector<uint8_t> m_buf;
 #endif
 };
+
+#endif // SOCKET_PCAP_HPP
 
