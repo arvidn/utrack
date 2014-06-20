@@ -46,7 +46,10 @@ exe udp_test : test_announce.cpp
 	<pcap>on
 	<conditional>@pcap
 	<target-os>windows:<library>ws2
+	:
 	;
+
+explicit udp_test ;
 
 exe utrack
 	:
