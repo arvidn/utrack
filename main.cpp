@@ -82,6 +82,7 @@ BOOL WINAPI sigint(DWORD s)
 void sigint(int s)
 #endif
 {
+	fprintf(stderr, "shutting down\n");
 	quit = true;
 
 #ifdef _WIN32
@@ -97,6 +98,14 @@ void print_usage()
 		);
 	exit(1);
 }
+
+static struct wsa_init_t {
+	wsa_init_t()
+	{
+		WSADATA wsaData;
+		WSAStartup(MAKEWORD(2, 2), &wsaData);
+	}
+} dummy_initializer;
 
 int main(int argc, char* argv[])
 {

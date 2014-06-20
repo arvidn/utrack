@@ -43,6 +43,7 @@ lib ws2 : : <name>ws2_32 ;
 
 exe udp_test : test_announce.cpp
 	:
+	<pcap>on
 	<conditional>@pcap
 	<target-os>windows:<library>ws2
 	;

@@ -41,7 +41,6 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 extern std::atomic<uint32_t> bytes_out;
 
-
 packet_socket::packet_socket(int listen_port, bool receive)
 	: m_socket(-1)
 	, m_receive(receive)

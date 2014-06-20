@@ -82,7 +82,9 @@ void send_connect(sockaddr_in const* to, packet_buffer& buf)
 	sockaddr_in from;
 	from.sin_family = AF_INET;
 	from.sin_port = htons(1024 + idx);
+#ifndef _WIN32
 	from.sin_len = sizeof(sockaddr_in);
+#endif
 	from.sin_addr.s_addr = htonl(0x7f000000 + idx);
 
 	iovec b = { &req, 16 };
@@ -108,7 +110,9 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 	sockaddr_in from;
 	from.sin_family = AF_INET;
 	from.sin_port = htons(1024 + idx);
+#ifndef _WIN32
 	from.sin_len = sizeof(sockaddr_in);
+#endif
 	from.sin_addr.s_addr = htonl(0x7f000000 + idx);
 
 	iovec b = { &req, sizeof(req) };
@@ -164,10 +168,17 @@ void incoming_packet(char const* buf, int size
 
 packet_socket* g_sock = nullptr;
 
+#ifdef _WIN32
+BOOL WINAPI sigint(DWORD s)
+#else
 void sigint(int s)
+#endif
 {
 	m_quit = true;
 	if (g_sock) g_sock->close();
+#ifdef _WIN32
+	return TRUE;
+#endif
 }
 
 int main(int argc, char* argv[])
@@ -178,10 +189,12 @@ int main(int argc, char* argv[])
 		return EXIT_FAILURE;
 	}
 
+	int r;
+#ifndef _WIN32
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = &sigint;
-	int r = sigaction(SIGINT, &sa, 0);
+	r = sigaction(SIGINT, &sa, 0);
 	if (r == -1)
 	{
 		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
@@ -193,10 +206,20 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
 		return 1;
 	}
+#else
+	if (SetConsoleCtrlHandler(&sigint, TRUE) == FALSE)
+	{
+		std::error_code ec(GetLastError(), std::system_category());
+		fprintf(stderr, "failed to register Ctrl-C handler: (%d) %s\n"
+			, ec.value(), ec.message().c_str());
+	}
+#endif
 
 	sockaddr_in to;
 	memset(&to, 0, sizeof(to));
+#ifndef _WIN32
 	to.sin_len = sizeof(to);
+#endif
 	to.sin_family = AF_INET;
 	r = inet_pton(AF_INET, argv[2], &to.sin_addr);
 	if (r < 0)
