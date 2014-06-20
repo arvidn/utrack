@@ -3,17 +3,48 @@ import feature : feature ;
 install stage-test : udp_test : <location>. ;
 install stage : utrack : <location>. ;
 
+feature pcap : off on win receive-only : composite propagated link-incompatible ;
+feature.compose <pcap>win : <define>USE_WINPCAP ;
+feature.compose <pcap>receive-only : <define>USE_SYSTEM_SEND_SOCKET ;
+
 explicit stage-test ;
 explicit stage ;
 
 lib libpcap : : <name>pcap : <search>/opt/local/lib
 	: <include>/opt/local/include <define>USE_PCAP ;
 
-exe udp_test : socket_pcap.cpp test_announce.cpp : <library>libpcap ;
+lib libwpcap : : <name>wpcap : <search>"c:\\Program Files\\wpdpack\\lib"
+	: <include>"c:\\Program Files\\wpdpack\\include" <define>USE_PCAP ;
 
-feature pcap : off on win receive-only : composite propagated link-incompatible ;
-feature.compose <pcap>win : <define>USE_WINPCAP ;
-feature.compose <pcap>receive-only : <define>USE_SYSTEM_SEND_SOCKET ;
+rule pcap ( properties * )
+{
+	local result ;
+	if <pcap>off in $(properties)
+	{
+		result += <source>socket_system.cpp ;
+		return $(result) ;
+	}
+
+	if <target-os>windows in $(properties)
+	{
+		result += <library>libwpcap ;
+	}
+	else
+	{
+		result += <library>libpcap ;
+	}
+
+	result += <source>socket_pcap.cpp ;
+	return $(result) ;
+}
+
+lib ws2 : : <name>ws2_32 ;
+
+exe udp_test : test_announce.cpp
+	:
+	<conditional>@pcap
+	<target-os>windows:<library>ws2
+	;
 
 exe utrack
 	:
@@ -24,12 +55,7 @@ exe utrack
 	key_rotate.cpp
 	receive_thread.cpp
 	:
-	<pcap>on:<library>libpcap
-	<pcap>win:<library>libpcap
-	<pcap>receive-only:<library>libpcap
-	<pcap>on:<source>socket_pcap.cpp
-	<pcap>receive-only:<source>socket_pcap.cpp
-	<pcap>win:<source>socket_pcap.cpp
-	<pcap>off:<source>socket_system.cpp
+	<target-os>windows:<library>ws2
+	<conditional>@pcap
 	;
 

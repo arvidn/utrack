@@ -78,10 +78,6 @@ struct announce_thread
 	announce_thread(int listen_port);
 #endif
 
-	// allow move
-	announce_thread(announce_thread&&) = default;
-	announce_thread& operator=(announce_thread&&) = default;
-
 	// disallow copy
 	announce_thread(announce_thread const&) = delete;
 	announce_thread& operator=(announce_thread const&) = delete;

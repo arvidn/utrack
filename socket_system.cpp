@@ -127,12 +127,17 @@ packet_socket::packet_socket(int listen_port, bool receive)
 
 packet_socket::~packet_socket()
 {
-	if (m_socket != -1) ::close(m_socket);
+	close();
 }
 
 void packet_socket::close()
 {
-	if (m_socket != -1) ::close(m_socket);
+	if (m_socket != -1)
+#ifdef _WIN32
+		::closesocket(m_socket);
+#else
+		::close(m_socket);
+#endif
 	m_socket = -1;
 }
 
@@ -156,11 +161,11 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 #ifdef _WIN32
 	// windows doesn't support the msghdr
 	char buf[1500];
-	char const* ptr = buf;
+	char* ptr = buf;
 	int len = 0;
 	if (num == 1)
 	{
-		ptr = v->iov_base;
+		ptr = (char*)v->iov_base;
 		len = v->iov_len;
 	}
 	else
@@ -187,7 +192,8 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 	do
 	{
 #ifdef _WIN32
-		int r = sendto(m_socket, ptr, len, 0, to, sizeof(sockaddr_in));
+		int r = sendto(m_socket, ptr, len, 0
+			, (sockaddr const*)to, sizeof(sockaddr_in));
 #else
 		int r = sendmsg(m_socket, &msg, MSG_NOSIGNAL);
 #endif
@@ -241,7 +247,11 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 				spincount = receive_spin_count;
 
+#ifdef _WIN32
+				int r = WSAPoll(&e, 1, 2000);
+#else
 				int r = poll(&e, 1, 2000);
+#endif
 				if (r == -1)
 				{
 					if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)

@@ -46,10 +46,6 @@ struct receive_thread
 #endif
 	~receive_thread();
 
-	// allow move
-	receive_thread(receive_thread&&) = default;
-	receive_thread& operator=(receive_thread&&) = default;
-
 	// disallow copy
 	receive_thread(receive_thread const&) = delete;
 	receive_thread& operator=(receive_thread const&) = delete;

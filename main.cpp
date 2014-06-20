@@ -42,6 +42,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <atomic>
 #include <unordered_map>
 #include <deque>
+#include <system_error>
 #include <cstdlib> // for rand()
 
 #include "swarm.hpp"
@@ -75,9 +76,17 @@ std::atomic<uint32_t> bytes_in = ATOMIC_VAR_INIT(0);
 // the number of dropped announce requests, because we couldn't keep up
 std::atomic<uint32_t> dropped = ATOMIC_VAR_INIT(0);
 
+#ifdef _WIN32
+BOOL WINAPI sigint(DWORD s)
+#else
 void sigint(int s)
+#endif
 {
 	quit = true;
+
+#ifdef _WIN32
+	return TRUE;
+#endif
 }
 
 void print_usage()
@@ -131,7 +140,12 @@ int main(int argc, char* argv[])
 	}
 	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
 #else
-#warning TODO: install windows ctrl-C handler
+	if (SetConsoleCtrlHandler(&sigint, TRUE) == FALSE)
+	{
+		std::error_code ec(GetLastError(), std::system_category());
+		fprintf(stderr, "failed to register Ctrl-C handler: (%d) %s\n"
+			, ec.value(), ec.message().c_str());
+	}
 #endif
 
 #ifdef USE_PCAP

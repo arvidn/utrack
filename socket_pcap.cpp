@@ -23,16 +23,21 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <errno.h> // for errno
 #include <string.h> // for strerror
 #include <stdlib.h> // for exit
+#include <assert.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#else
 #include <unistd.h> // for close
 #include <poll.h> // for poll
 #include <fcntl.h> // for F_GETFL and F_SETFL
 #include <sys/socket.h> // for iovec
-#include <assert.h>
 #include <netinet/in.h> // for sockaddr
 #include <net/if.h> // for ifreq
 #include <sys/sockio.h> // for SIOCGIFADDR
 #include <sys/ioctl.h>
 #include <net/if_dl.h> // for sockaddr_dl
+#endif
 
 #include <atomic>
 #include <mutex>

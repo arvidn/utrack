@@ -34,6 +34,8 @@ struct iovec {
 	void* iov_base;
 	int iov_len;
 };
+
+typedef int socklen_t;
 #endif
 
 struct incoming_packet_t
