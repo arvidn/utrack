@@ -231,9 +231,17 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 			, (sockaddr*)&from, &fromlen);
 		if (size == -1)
 		{
+#ifdef _WIN32
+			int err = WSAGetLastError();
+#else
 			int err = errno;
+#endif
 			if (err == EINTR) continue;
+#ifdef _WIN32
+			if (err == WSAEWOULDBLOCK)
+#else
 			if (err == EAGAIN || errno == EWOULDBLOCK)
+#endif
 			{
 				--spincount;
 				if (spincount > 0) continue;
