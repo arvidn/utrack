@@ -181,6 +181,16 @@ void sigint(int s)
 #endif
 }
 
+#ifdef _WIN32
+static struct wsa_init_t {
+	wsa_init_t()
+	{
+		WSADATA wsaData;
+		WSAStartup(MAKEWORD(2, 2), &wsaData);
+	}
+} dummy_initializer;
+#endif
+
 int main(int argc, char* argv[])
 {
 	if (argc < 4)
