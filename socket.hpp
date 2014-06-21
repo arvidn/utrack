@@ -25,17 +25,23 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <array>
 #include <mutex>
 
-#ifndef _WIN32
-#include <netinet/in.h> // for sockaddr
-#include <sys/socket.h> // for iovec
-#else
+#ifdef _WIN32
+
 #include <winsock2.h>
+
+// windows doesn't have iovec or socklen
 struct iovec {
 	void* iov_base;
 	int iov_len;
 };
 
 typedef int socklen_t;
+
+#else
+
+#include <netinet/in.h> // for sockaddr
+#include <sys/socket.h> // for iovec
+
 #endif
 
 struct incoming_packet_t

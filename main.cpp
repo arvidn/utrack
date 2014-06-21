@@ -27,7 +27,9 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <sys/socket.h>
 #include <sys/errno.h>
 #include <netinet/in.h>
+#include <arpa/inet.h> // for inet_ntop
 #include <unistd.h>
+#include <net/if_dl.h> // for sockaddr_dl
 #else
 #include <winsock2.h>
 #endif
@@ -92,12 +94,15 @@ void sigint(int s)
 
 void print_usage()
 {
-	printf("usage: utrack device [port]\n\n"
-		"device       the network device to listen on\n"
-		"port         the UDP port to listen on (defaults to 80)\n"
+	printf("usage:\nutrack device [port]\n\n"
+		"   device       the network device to listen on\n"
+		"   port         the UDP port to listen on (defaults to 80)\n"
 		"\n"
-		"      utrack --list-devices\n\n"
-		"prints available network devices to bind to\n"
+		"utrack --list-devices\n\n"
+		"   prints available network devices to bind to\n"
+		"\n"
+		"utrack --help\n\n"
+		"   displays this message\n"
 		);
 	exit(1);
 }
@@ -114,7 +119,7 @@ static struct wsa_init_t {
 
 int main(int argc, char* argv[])
 {
-	if (argc == 2 && strcmp(argv[1], "--list-devices"))
+	if (argc == 2 && strcmp(argv[1], "--list-devices") == 0)
 	{
 		pcap_if_t *alldevs;
 		char error_msg[PCAP_ERRBUF_SIZE];
@@ -127,7 +132,7 @@ int main(int argc, char* argv[])
 
 		for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
 		{
-			printf("%s:\n", d->name);
+			printf("%s\n", d->name);
 			for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
 			{
 				char buf[100];
@@ -135,20 +140,21 @@ int main(int argc, char* argv[])
 				{
 					case AF_INET:
 						printf("   %s\n", inet_ntop(AF_INET
-							, a->addr->sa_data, buf, sizeof(buf)));
+							, &((sockaddr_in*)a->addr)->sin_addr, buf, sizeof(buf)));
 						break;
 					case AF_INET6:
 						printf("   %s\n", inet_ntop(AF_INET6
-							, a->addr->sa_data, buf, sizeof(buf)));
+							, &((sockaddr_in6*)a->addr)->sin6_addr, buf, sizeof(buf)));
 						break;
-					default:
-						printf("   unknown (%d)\n", a->addr->sa_family);
 				}
 			}
 		}
 		pcap_freealldevs(alldevs);
 		return 0;
 	}
+	if (argc == 2 && strcmp(argv[1], "--help") == 0)
+		print_usage();
+
 	if (argc > 3 || argc < 2) print_usage();
 
 	int listen_port = 80;

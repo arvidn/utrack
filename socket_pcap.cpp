@@ -38,6 +38,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <sys/sockio.h> // for SIOCGIFADDR
 #include <sys/ioctl.h>
 #include <net/if_dl.h> // for sockaddr_dl
+#include <arpa/inet.h> // for inet_ntop
 #endif
 
 #include <atomic>
@@ -98,6 +99,30 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (r == -1)
 		fprintf(stderr, "pcap_setdirection() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
+	uint32_t ip = 0;
+	uint32_t mask = 0;
+	r = pcap_lookupnet(device, &ip, &mask, error_msg);
+	if (r != 0)
+	{
+		printf("pcap_lookupnet() = %d \"%s\"\n", r, error_msg);
+		exit(1);
+	}
+
+	m_our_addr.sin_family = AF_INET;
+#ifndef _WIN32
+	m_our_addr.sin_len = sizeof(sockaddr_in);
+#endif
+	m_our_addr.sin_addr.s_addr = ip;
+	m_our_addr.sin_port = htons(listen_port);
+
+	m_mask.sin_family = AF_INET;
+#ifndef _WIN32
+	m_mask.sin_len = sizeof(sockaddr_in);
+#endif
+	m_mask.sin_addr.s_addr = mask;
+	m_mask.sin_port = 0;
+
+
 #ifndef _WIN32
 	ifreq req;
 	strncpy(req.ifr_name, device, IFNAMSIZ);
@@ -123,28 +148,24 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	else
 	{
 		fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
-		m_our_addr.sin_addr.s_addr = 0;
 	}
-#else
-	uint32_t ip = 0;
-	uint32_t mask = 0;
-	r = pcap_lookupnet(device, &ip, &mask, error_msg);
-	if (r != 0)
-	{
-		printf("pcap_lookupnet() = %d \"%s\"\n", r, error_msg);
-	}
-	m_our_addr.sin_addr.s_addr = htonl(ip);
 #endif
 
-	m_our_addr.sin_port = htons(listen_port);
+	ip = ntohl(m_our_addr.sin_addr.s_addr);
+	mask = ntohl(mask);
 
-	uint32_t host_ip = ntohl(m_our_addr.sin_addr.s_addr);
 	printf("bound to %d.%d.%d.%d\n"
-		, (host_ip >> 24) & 0xff
-		, (host_ip >> 16) & 0xff
-		, (host_ip >> 8) & 0xff
-		, host_ip & 0xff);
-/*
+		, (ip >> 24) & 0xff
+		, (ip >> 16) & 0xff
+		, (ip >> 8) & 0xff
+		, ip & 0xff);
+
+	printf("mask %d.%d.%d.%d\n"
+		, (mask >> 24) & 0xff
+		, (mask >> 16) & 0xff
+		, (mask >> 8) & 0xff
+		, mask & 0xff);
+
 	pcap_if_t *alldevs;
 	r = pcap_findalldevs(&alldevs, error_msg);
 	if (r != 0)
@@ -173,12 +194,15 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	for (int i = 0; i< 6; i++)
 		printf(&":%02x"[i == 0], uint8_t(m_eth_addr.addr[i]));
 	printf("\n");
-*/
+
 	pcap_activate(m_pcap);
 
 	m_link_layer = pcap_datalink(m_pcap);
 	if (m_link_layer < 0)
+	{
 		fprintf(stderr, "pcap_datalink() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+		exit(-1);
+	}
 
 	// TODO: it would be nice to be able to bind to a specific
 	// IP too, not just port
@@ -253,7 +277,9 @@ packet_buffer::packet_buffer(packet_socket& s)
 	, m_send_cursor(0)
 #endif
 	, m_from(s.m_our_addr)
+	, m_mask(s.m_mask)
 	, m_eth_from(s.m_eth_addr)
+	, m_arp_cache(s.m_arp_cache)
 #ifdef USE_WINPCAP
 	, m_queue(pcap_sendqueue_alloc(0x100000))
 	, m_pcap(s.m_pcap)
@@ -323,9 +349,17 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		}
 		case DLT_EN10MB:
 		{
-			// TODO: figure out how to fill in the destination MAC
-			// destination MAC address
-			memset(ptr, 0, 6);
+			uint32_t dst = to->sin_addr.s_addr;
+
+			// if the address is not part of the local network, set dst to 0
+			// to indicate the default route out of our network
+			if ((dst & m_mask.sin_addr.s_addr) !=
+				(from->sin_addr.s_addr & m_mask.sin_addr.s_addr))
+				dst = 0;
+
+			address_eth const& mac = m_arp_cache[dst];
+
+			memcpy(ptr, mac.addr, 6);
 			// source MAC address
 			memcpy(ptr + 6, m_eth_from.addr, 6);
 			// ethertype (upper layer protocol)
@@ -463,6 +497,9 @@ struct receive_state
 	// ignore packets sent to other addresses and ports than this one.
 	// a port of 0 means accept packets on any port
 	sockaddr_in local_addr;
+	sockaddr_in local_mask;
+
+	std::unordered_map<uint32_t, address_eth>* arp_cache;
 };
 
 void packet_handler(u_char *user, const struct pcap_pkthdr *h
@@ -540,6 +577,53 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// UDP header: src-port, dst-port, len, chksum
 	memcpy(&from->sin_port, udp_header, 2);
 	memcpy(&from->sin_addr, ip_header + 12, 4);
+
+	// ETHERNET
+	if (st->link_header_size == 14)
+	{
+		uint8_t const* ethernet_header = bytes;
+
+		uint32_t dst = from->sin_addr.s_addr;
+
+		uint8_t* ip = (uint8_t*)&dst;
+		printf("from ip: %d.%d.%d.%d ether: %02x:%02x:%02x:%02x:%02x:%02x\n"
+				, ip[0]
+				, ip[1]
+				, ip[2]
+				, ip[3]
+				, ethernet_header[6]
+				, ethernet_header[7]
+				, ethernet_header[8]
+				, ethernet_header[9]
+				, ethernet_header[10]
+				, ethernet_header[11]
+			);
+
+		// if the address is not part of the local network, set dst to 0
+		// to indicate the default route out of our network
+		if ((dst & st->local_mask.sin_addr.s_addr) !=
+			(st->local_addr.sin_addr.s_addr & st->local_mask.sin_addr.s_addr))
+			dst = 0;
+
+		if (st->arp_cache->count(dst) == 0)
+		{
+			(*st->arp_cache)[dst] = address_eth(ethernet_header + 6);
+
+			uint8_t* ip = (uint8_t*)&dst;
+			printf("adding ARP entry: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n"
+				, ip[0]
+				, ip[1]
+				, ip[2]
+				, ip[3]
+				, ethernet_header[6]
+				, ethernet_header[7]
+				, ethernet_header[8]
+				, ethernet_header[9]
+				, ethernet_header[10]
+				, ethernet_header[11]
+				);
+		}
+	}
 
 	++st->current;
 
@@ -676,6 +760,8 @@ void packet_socket::send_thread()
 // fills in the in_packets array with incoming packets. Returns the number filled in
 int packet_socket::receive(incoming_packet_t* in_packets, int num)
 {
+	// TODO: should we just pass in "this" instead? and make it a member
+	// function?
 	receive_state st;
 	st.pkts = in_packets;
 	st.len = num;
@@ -684,6 +770,8 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	st.buffer_offset = 0;
 	st.handle = m_pcap;
 	st.local_addr = m_our_addr;
+	st.local_mask = m_mask;
+	st.arp_cache = &m_arp_cache;
 
 	switch (m_link_layer)
 	{

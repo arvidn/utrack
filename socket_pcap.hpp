@@ -30,6 +30,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <unordered_map>
 
 enum {
 	// the receive buffer size for packets, specified in uint64_ts
@@ -44,6 +45,7 @@ struct packet_buffer;
 struct address_eth
 {
 	address_eth() { memset(addr, 0, sizeof(addr)); }
+	explicit address_eth(uint8_t const* ptr) { memcpy(addr, ptr, sizeof(addr)); }
 	uint8_t addr[6];
 };
 
@@ -72,7 +74,12 @@ private:
 	std::array<uint64_t, receive_buffer_size> m_buffer;
 
 	sockaddr_in m_our_addr;
+	sockaddr_in m_mask;
 	address_eth m_eth_addr;
+
+	// maps local IPs (IPs masked by the network mask)
+	// to the corresponding ethernet address (MAC address)
+	std::unordered_map<uint32_t, address_eth> m_arp_cache;
 
 #ifndef USE_WINPCAP
 	void send_thread();
@@ -116,7 +123,9 @@ private:
 	int m_send_cursor;
 #endif
 	sockaddr_in m_from;
+	sockaddr_in m_mask;
 	address_eth m_eth_from;
+	std::unordered_map<uint32_t, address_eth>& m_arp_cache;
 #ifdef USE_WINPCAP
 	pcap_send_queue* m_queue;
 	pcap_t* m_pcap;
