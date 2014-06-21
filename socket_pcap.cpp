@@ -373,7 +373,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		}
 		default:
 			// unsupported link layer
-			fprintf(stderr, "unsupported data link layer\n");
+			fprintf(stderr, "unsupported data link layer (%d)\n", m_link_layer);
 			return false;
 	}
 
@@ -517,6 +517,8 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 
 	// TODO: support IPv6 also
 
+	uint8_t const* ethernet_header = bytes;
+
 	uint8_t const* ip_header = bytes + st->link_header_size;
 
 	// we only support IPv4 for now, and no IP options, just
@@ -581,23 +583,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 	// ETHERNET
 	if (st->link_header_size == 14)
 	{
-		uint8_t const* ethernet_header = bytes;
-
 		uint32_t dst = from->sin_addr.s_addr;
-
-		uint8_t* ip = (uint8_t*)&dst;
-		printf("from ip: %d.%d.%d.%d ether: %02x:%02x:%02x:%02x:%02x:%02x\n"
-				, ip[0]
-				, ip[1]
-				, ip[2]
-				, ip[3]
-				, ethernet_header[6]
-				, ethernet_header[7]
-				, ethernet_header[8]
-				, ethernet_header[9]
-				, ethernet_header[10]
-				, ethernet_header[11]
-			);
 
 		// if the address is not part of the local network, set dst to 0
 		// to indicate the default route out of our network
