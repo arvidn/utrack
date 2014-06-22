@@ -71,7 +71,7 @@ private:
 	pcap_t* m_pcap;
 	int m_link_layer;
 	std::atomic<uint32_t> m_closed;
-	std::array<uint64_t, receive_buffer_size> m_buffer;
+	std::vector<uint64_t> m_buffer;
 
 	// the IP and port we send packets from
 	sockaddr_in m_our_addr;

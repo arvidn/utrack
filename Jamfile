@@ -14,7 +14,9 @@ lib libpcap : : <name>pcap : <search>/opt/local/lib
 	: <include>/opt/local/include <define>USE_PCAP ;
 
 lib libwpcap : : <name>wpcap : <search>"c:\\Program Files\\wpdpack\\lib"
-	: <include>"c:\\Program Files\\wpdpack\\include" <define>USE_PCAP ;
+	:
+	<include>"c:\\Program Files\\wpdpack\\include"
+	<define>WPCAP <define>USE_PCAP ;
 
 rule pcap ( properties * )
 {

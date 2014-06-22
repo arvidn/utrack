@@ -60,6 +60,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	, m_send_cursor(0)
 #endif
 {
+	m_buffer.resize(receive_buffer_size);
 #ifndef USE_WINPCAP
 	m_send_buffer.resize(send_buffer_size);
 #endif
@@ -168,6 +169,10 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		, (mask >> 8) & 0xff
 		, mask & 0xff);
 
+#ifdef _WIN32
+	// find the ethernet address for device
+
+#else
 	pcap_if_t *alldevs;
 	r = pcap_findalldevs(&alldevs, error_msg);
 	if (r != 0)
@@ -182,15 +187,26 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
 		{
 			if (a->addr->sa_family != AF_LINK || a->addr->sa_data == nullptr)
+			{
+				printf("addr: %d\n", a->addr->sa_family);
 				continue;
+			}
 
 			sockaddr_dl* link = (struct sockaddr_dl*)a->addr;
 
+			printf("link addr\n");
+			for (int i = 0; i < 8; ++i)
+				printf(":%02x" + (i == 0), link->sdl_data[i]);
+			printf("\n");
+
+#ifndef _WIN32
 			memcpy(m_eth_addr.addr, LLADDR(link), 6);
+#endif
 			break;
 		}
 	}
 	pcap_freealldevs(alldevs);
+#endif
 
 	printf("ethernet: ");
 	for (int i = 0; i< 6; i++)
