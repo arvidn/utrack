@@ -214,6 +214,14 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		exit(-1);
 	}
 
+	printf("link layer: ");
+	switch (m_link_layer)
+	{
+		case DLT_NULL: printf("loopback\n"); break;
+		case DLT_EN10MB: printf("ethernet\n"); break;
+		default: printf("unknown\n"); break;
+	}
+
 	std::string program_text = "udp";
 	if (listen_port != 0)
 	{

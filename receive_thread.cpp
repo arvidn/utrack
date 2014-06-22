@@ -175,6 +175,12 @@ void receive_thread::incoming_packet(char const* buf, int size
 			udp_connect_response resp;
 			resp.action = htonl(action_connect);
 			resp.connection_id = generate_connection_id(from);
+
+//			uint8_t const* addr = (uint8_t const*)&from->sin_addr.s_addr;
+//			printf("connection ID (%d.%d.%d.%d:%u) %" PRIx64 "\n"
+//				, addr[0], addr[1], addr[2], addr[3], ntohs(from->sin_port)
+//				, resp.connection_id);
+
 			resp.transaction_id = hdr->transaction_id;
 			++connects;
 			iovec iov = { &resp, 16};
@@ -187,8 +193,9 @@ void receive_thread::incoming_packet(char const* buf, int size
 			if (!verify_connection_id(hdr->connection_id, from))
 			{
 				uint8_t const* addr = (uint8_t const*)&from->sin_addr.s_addr;
-				printf("invalid connection ID (%d.%d.%d.%d:%u)\n"
-					, addr[0], addr[1], addr[2], addr[3], ntohs(from->sin_port));
+				printf("invalid connection ID (%d.%d.%d.%d:%u) %" PRIx64 "\n"
+					, addr[0], addr[1], addr[2], addr[3], ntohs(from->sin_port)
+					, hdr->connection_id);
 				++errors;
 				// log error
 				return;

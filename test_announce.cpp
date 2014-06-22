@@ -85,7 +85,8 @@ void send_connect(sockaddr_in const* to, packet_buffer& buf)
 #ifndef _WIN32
 	from.sin_len = sizeof(sockaddr_in);
 #endif
-	from.sin_addr.s_addr = htonl(0x0a000113);
+//	from.sin_addr.s_addr = htonl(0x0a000113);
+	from.sin_addr.s_addr = htonl(0x7f000001 + idx);
 
 	iovec b = { &req, 16 };
 	buf.append_impl(&b, 1, to, &from);
@@ -113,7 +114,8 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 #ifndef _WIN32
 	from.sin_len = sizeof(sockaddr_in);
 #endif
-	from.sin_addr.s_addr = htonl(0x7f000000 + idx);
+//	from.sin_addr.s_addr = htonl(0x0a000113);
+	from.sin_addr.s_addr = htonl(0x7f000001 + idx);
 
 	iovec b = { &req, sizeof(req) };
 	buf.append_impl(&b, 1, to, &from);
