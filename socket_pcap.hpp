@@ -63,6 +63,8 @@ struct packet_socket
 
 	bool send(packet_buffer& packets);
 
+	void local_endpoint(sockaddr_in* addr);
+
 	// fills in the in_packets array with incoming packets. Returns the number filled in
 	int receive(incoming_packet_t* in_packets, int num);
 

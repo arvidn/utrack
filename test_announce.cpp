@@ -64,7 +64,7 @@ sha1_hash get_info_hash(int idx)
 	return ret;
 }
 
-void send_connect(sockaddr_in const* to, packet_buffer& buf)
+void send_connect(sockaddr_in const* to, packet_buffer& buf, bool loopback)
 {
 	static int idx = 0;
 
@@ -79,21 +79,28 @@ void send_connect(sockaddr_in const* to, packet_buffer& buf)
 	req.action = htonl(action_connect);
 	req.transaction_id = htonl(idx);
 
-	sockaddr_in from;
-	from.sin_family = AF_INET;
-	from.sin_port = htons(1024 + idx);
-#ifndef _WIN32
-	from.sin_len = sizeof(sockaddr_in);
-#endif
-//	from.sin_addr.s_addr = htonl(0x0a000113);
-	from.sin_addr.s_addr = htonl(0x7f000001 + idx);
-
 	iovec b = { &req, 16 };
-	buf.append_impl(&b, 1, to, &from);
+
+	if (loopback)
+	{
+		sockaddr_in from;
+		from.sin_family = AF_INET;
+		from.sin_port = htons(1024 + idx);
+#ifndef _WIN32
+		from.sin_len = sizeof(sockaddr_in);
+#endif
+		from.sin_addr.s_addr = htonl(0x7f000001 + idx);
+
+		buf.append_impl(&b, 1, to, &from);
+	}
+	else
+	{
+		buf.append(&b, 1, to);
+	}
 }
 
 void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
-	, packet_buffer& buf)
+	, packet_buffer& buf, bool loopback)
 {
 	udp_announce_message req;
 	req.action = htonl(action_announce);
@@ -108,21 +115,28 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 	req.port = htons(1024 + idx);
 	req.extensions = 0;
 
-	sockaddr_in from;
-	from.sin_family = AF_INET;
-	from.sin_port = htons(1024 + idx);
-#ifndef _WIN32
-	from.sin_len = sizeof(sockaddr_in);
-#endif
-//	from.sin_addr.s_addr = htonl(0x0a000113);
-	from.sin_addr.s_addr = htonl(0x7f000001 + idx);
-
 	iovec b = { &req, sizeof(req) };
-	buf.append_impl(&b, 1, to, &from);
+
+	if (loopback)
+	{
+		sockaddr_in from;
+		from.sin_family = AF_INET;
+		from.sin_port = htons(1024 + idx);
+#ifndef _WIN32
+		from.sin_len = sizeof(sockaddr_in);
+#endif
+		from.sin_addr.s_addr = htonl(0x7f000001 + idx);
+
+		buf.append_impl(&b, 1, to, &from);
+	}
+	else
+	{
+		buf.append(&b, 1, to);
+	}
 }
 
 void incoming_packet(char const* buf, int size
-	, sockaddr_in const* from, packet_buffer& send_buffer)
+	, sockaddr_in const* from, packet_buffer& send_buffer, bool loopback)
 {
 	udp_announce_response const* resp = (udp_announce_response const*)buf;
 
@@ -160,9 +174,13 @@ void incoming_packet(char const* buf, int size
 			}
 
 			++connects;
-			send_announce(idx, resp->connection_id, from, send_buffer);
-			send_connect(from, send_buffer);
-			send_connect(from, send_buffer);
+			send_announce(idx, resp->connection_id, from, send_buffer, loopback);
+			send_connect(from, send_buffer, loopback);
+
+			// every 4th connect response, send an additional connect, to
+			// keep ramping up the conect rate indefinitely (until we bump
+			// up against the capacity and packets are lost)
+			if ((idx & 0x3) == 0) send_connect(from, send_buffer, loopback);
 			break;
 		}
 	}
@@ -256,10 +274,15 @@ int main(int argc, char* argv[])
 	using std::chrono::milliseconds;
 	using std::chrono::seconds;
 
+	sockaddr_in ep;
+	sock.local_endpoint(&ep);
+	bool loopback = (ep.sin_addr.s_addr == htonl(0x7f000001));
+	printf("loopback address\n");
+
 	clock::time_point start = clock::now();
 
-	for (int i = 0; i < 100; ++i)
-		send_connect(&to, send_buffer);
+	for (int i = 0; i < 1000; ++i)
+		send_connect(&to, send_buffer, loopback);
 	sock.send(send_buffer);
 
 	incoming_packet_t pkts[1024];
@@ -270,7 +293,7 @@ int main(int argc, char* argv[])
 		for (int i = 0; i < recvd; ++i)
 		{
 			incoming_packet(pkts[i].buffer, pkts[i].buflen
-				, (sockaddr_in*)&pkts[i].from, send_buffer);
+				, (sockaddr_in*)&pkts[i].from, send_buffer, loopback);
 		}
 
 		sock.send(send_buffer);

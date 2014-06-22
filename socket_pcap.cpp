@@ -280,8 +280,8 @@ bool packet_socket::send(packet_buffer& packets)
 
 	if (m_send_cursor + packets.m_send_cursor > m_send_buffer.size())
 	{
-		printf("(dropping %d kiB)\n"
-			, packets.m_send_cursor / 1024);
+//		printf("(dropping %d kiB)\n"
+//			, packets.m_send_cursor / 1024);
 		packets.m_send_cursor = 0;
 		return false;
 	}
@@ -853,5 +853,10 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 		if (r == -1)
 			fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 	}
+}
+
+void packet_socket::local_endpoint(sockaddr_in* addr)
+{
+	*addr = m_our_addr;
 }
 
