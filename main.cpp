@@ -1,6 +1,6 @@
 /*
 utrack is a very small an efficient BitTorrent tracker
-Copyright (C) 2010-2013  Arvid Norberg
+Copyright (C) 2010-2014  Arvid Norberg
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -98,9 +98,11 @@ void print_usage()
 		"   device       the network device to listen on\n"
 		"   port         the UDP port to listen on (defaults to 80)\n"
 		"\n"
+#ifdef USE_PCAP
 		"utrack --list-devices\n\n"
 		"   prints available network devices to bind to\n"
 		"\n"
+#endif
 		"utrack --help\n\n"
 		"   displays this message\n"
 		);
@@ -119,6 +121,7 @@ static struct wsa_init_t {
 
 int main(int argc, char* argv[])
 {
+#ifdef USE_PCAP
 	if (argc == 2 && strcmp(argv[1], "--list-devices") == 0)
 	{
 		pcap_if_t *alldevs;
@@ -152,6 +155,8 @@ int main(int argc, char* argv[])
 		pcap_freealldevs(alldevs);
 		return 0;
 	}
+#endif // USE_PCAP
+
 	if (argc == 2 && strcmp(argv[1], "--help") == 0)
 		print_usage();
 

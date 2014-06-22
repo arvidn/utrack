@@ -45,6 +45,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <mutex>
 #include <chrono>
 #include <thread>
+#include <string>
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -144,6 +145,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 			exit(-1);
 		}
 		m_our_addr = *our_ip;
+		m_our_addr.sin_port = htons(listen_port);
 	}
 	else
 	{
@@ -204,14 +206,22 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		exit(-1);
 	}
 
-	// TODO: it would be nice to be able to bind to a specific
-	// IP too, not just port
-	char program_text[100];
-	char const* format_string = "udp dst port %d";
-	if (listen_port == 0) format_string = "udp";
-	snprintf(program_text, sizeof(program_text), format_string, listen_port);
+	std::string program_text = "udp";
+	if (listen_port != 0)
+	{
+		program_text += " dst port ";
+		program_text += std::to_string(listen_port);
+
+		char buf[100];
+		program_text += " and host ";
+		program_text += inet_ntop(AF_INET, &m_our_addr.sin_addr.s_addr
+			, buf, sizeof(buf));
+	}
+
+	fprintf(stderr, "capture filter: \"%s\"\n", program_text.c_str());
+
 	bpf_program p;
-	r = pcap_compile(m_pcap, &p, program_text, 1, 0xffffffff);
+	r = pcap_compile(m_pcap, &p, program_text.c_str(), 1, 0xffffffff);
 	if (r == -1)
 		fprintf(stderr, "pcap_compile() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
@@ -502,8 +512,8 @@ struct receive_state
 	std::unordered_map<uint32_t, address_eth>* arp_cache;
 };
 
-void packet_handler(u_char *user, const struct pcap_pkthdr *h
-	, const u_char *bytes)
+void packet_handler(u_char* user, const struct pcap_pkthdr* h
+	, const u_char* bytes)
 {
 	receive_state* st = (receive_state*)user;
 
@@ -526,47 +536,72 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *h
 
 	// version and length. Ignore any non IPv4 packets and any packets
 	// with IP options headers
-	if (ip_header[0] != 0x45) return;
+	if (ip_header[0] != 0x45) {
+		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
+			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
+		return;
+	}
 
 	// flags (ignore any packet with more-fragments set)
-	if (ip_header[6] & 0x20) return;
+	if (ip_header[6] & 0x20) {
+		fprintf(stderr, "ignoring fragmented IP packet\n");
+		return;
+	}
 
 	// ignore any packet with fragment offset
-	if ((ip_header[6] & 0x1f) != 0 || ip_header[7] != 0) return;
+	if ((ip_header[6] & 0x1f) != 0 || ip_header[7] != 0) {
+		fprintf(stderr, "ignoring fragmented IP packet\n");
+		return;
+	}
 
 	// ignore any packet whose transport protocol is not UDP
-	if (ip_header[9] != 0x11) return;
+	if (ip_header[9] != 0x11) {
+		fprintf(stderr, "ignoring non UDP packet (protocol: %d)\n"
+			, ip_header[9]);
+		return;
+	}
 
 	uint8_t const* udp_header = ip_header + 20;
 
 	// only look at packets to our listen port
 	if (st->local_addr.sin_port != 0 &&
 		memcmp(&udp_header[2], &st->local_addr.sin_port, 2) != 0)
+	{
+		fprintf(stderr, "ignoring packet not to our port (port: %d)\n"
+			, ntohs(*(uint16_t*)(udp_header+2)));
 		return;
+	}
 
 	// only look at packets sent to the IP we bound to
-	// address 0 means any address
-	if (st->local_addr.sin_addr.s_addr != 0 &&
+	// port 0 means any address
+	if (st->local_addr.sin_port != 0 &&
 		memcmp(&st->local_addr.sin_addr.s_addr, ip_header + 16, 4) != 0)
+	{
+		fprintf(stderr, "ignoring packet not to our address (%d.%d.%d.%d)\n"
+			, ip_header[16]
+			, ip_header[17]
+			, ip_header[18]
+			, ip_header[19]);
 		return;
+	}
 
-	int len = h->caplen - 28 - st->link_header_size;
-	bytes += 28 + st->link_header_size;
+	int payload_len = h->caplen - 28 - st->link_header_size;
+	uint8_t const* payload = bytes + 28 + st->link_header_size;
 
-	if (len > 1500)
+	if (payload_len > 1500)
 	{
 		fprintf(stderr, "incoming packet too large\n");
 		return;
 	}
 
 	incoming_packet_t& pkt = st->pkts[st->current];
-	int len8 = (len + 7) / 8;
+	int len8 = (payload_len + 7) / 8;
 
 	assert(st->buffer_offset + len8 <= receive_buffer_size);
 
-	memcpy(&st->buffer[st->buffer_offset], bytes, len);
+	memcpy(&st->buffer[st->buffer_offset], payload, payload_len);
 	pkt.buffer = (char*)&st->buffer[st->buffer_offset];
-	pkt.buflen = len;
+	pkt.buflen = payload_len;
 	st->buffer_offset += len8;
 
 	// copy from IP header
@@ -657,7 +692,7 @@ void packet_socket::send_thread()
 	bind_addr.sin_family = AF_INET;
 	bind_addr.sin_addr.s_addr = INADDR_ANY;
 	bind_addr.sin_port = m_our_addr.sin_port;
-	int r = bind(sock, (sockaddr*)&bind_addr, sizeof(bind_addr));
+	int r = bind(sock, (sockaddr*)&d_addr, sizeof(bind_addr));
 	if (r < 0)
 	{
 		fprintf(stderr, "failed to bind send socket to port %d (%d): %s\n"
@@ -718,6 +753,7 @@ void packet_socket::send_thread()
 #ifdef USE_SYSTEM_SEND_SOCKET
 			assert(len >= sizeof(sockaddr_in));
 			sockaddr_in* to = (sockaddr_in*)(local_buffer.data() + i);
+
 			int r = sendto(sock
 				, local_buffer.data() + i + sizeof(sockaddr_in)
 				, len - sizeof(sockaddr_in), 0, (sockaddr*)to, sizeof(sockaddr_in));

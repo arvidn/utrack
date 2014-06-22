@@ -73,8 +73,15 @@ private:
 	std::atomic<uint32_t> m_closed;
 	std::array<uint64_t, receive_buffer_size> m_buffer;
 
+	// the IP and port we send packets from
 	sockaddr_in m_our_addr;
+
+	// the network mask for this interface. This is used to maintain the 
+	// ARP cache
 	sockaddr_in m_mask;
+
+	// the ethernet address for this interface. Use for rendering ethernet
+	// frames for outgoing packets.
 	address_eth m_eth_addr;
 
 	// maps local IPs (IPs masked by the network mask)
