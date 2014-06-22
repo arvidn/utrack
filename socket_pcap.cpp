@@ -193,15 +193,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 			}
 
 			sockaddr_dl* link = (struct sockaddr_dl*)a->addr;
-
-			printf("link addr\n");
-			for (int i = 0; i < 8; ++i)
-				printf(":%02x" + (i == 0), link->sdl_data[i]);
-			printf("\n");
-
-#ifndef _WIN32
 			memcpy(m_eth_addr.addr, LLADDR(link), 6);
-#endif
 			break;
 		}
 	}
