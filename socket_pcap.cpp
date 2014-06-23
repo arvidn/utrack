@@ -27,6 +27,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <iphlpapi.h>
 #define snprintf _snprintf
 #else
 #include <unistd.h> // for close
@@ -125,7 +126,67 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	m_mask.sin_port = 0;
 
 
-#ifndef _WIN32
+#ifdef _WIN32
+	ULONG dwSize = 0;
+	DWORD dwRetVal;
+
+	std::vector<IP_ADAPTER_ADDRESSES> buffer(10);
+	IP_ADAPTER_ADDRESSES *adapters = buffer.data();
+
+	if (GetAdaptersAddresses(AF_UNSPEC
+		, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+		, nullptr
+		, adapters, &dwSize) == ERROR_BUFFER_OVERFLOW)
+	{
+		buffer.resize((dwSize + sizeof(IP_ADAPTER_ADDRESSES) - 1)/ sizeof(IP_ADAPTER_ADDRESSES));
+		adapters = (IP_ADAPTER_ADDRESSES*)buffer.data();
+	}
+
+	bool found = false;
+	if (memcmp(device, "\\Device\\NPF_", 12) != 0)
+	{
+		fprintf(stderr, "invalid device name\n");
+		exit(1);
+	}
+	char const* cmp_dev = device + sizeof("\\Device\\NPF_") - 1;
+	if ((dwRetVal = GetAdaptersAddresses(AF_UNSPEC
+		, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+		, nullptr
+		, adapters, &dwSize)) == NO_ERROR)
+	{
+		for (; adapters; adapters = adapters->Next)
+		{
+			if (strcmp(adapters->AdapterName, cmp_dev) != 0) continue;
+			IP_ADAPTER_UNICAST_ADDRESS* unicast = adapters->FirstUnicastAddress;
+
+			while (unicast)
+			{
+				if (unicast->Address.lpSockaddr->sa_family == AF_INET)
+				{
+					found = true;
+					m_our_addr.sin_addr.s_addr
+						= ((sockaddr_in*)unicast->Address.lpSockaddr)->sin_addr.s_addr;
+					break;
+				}
+				unicast = unicast->Next;
+			}
+
+			if (found) break;
+		}
+		if (!found)
+		{
+			fprintf(stderr, "device not found \"%s\"\n"
+				, device);
+			exit(1);
+		}
+	}
+	else
+	{
+		fprintf(stderr, "GetIpAddrTable call failed with %d\n", dwRetVal);
+	}
+
+
+#else
 	ifreq req;
 	strncpy(req.ifr_name, device, IFNAMSIZ);
 	int s = socket(AF_INET, SOCK_DGRAM, 0);
