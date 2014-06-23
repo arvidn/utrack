@@ -426,7 +426,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 	ip_header[7] = 0;
 
 	// TTL
-	ip_header[8] = 0x4;
+	ip_header[8] = 0x80;
 
 	// protocol
 	ip_header[9] = 17;
@@ -457,7 +457,18 @@ bool packet_buffer::append_impl(iovec const* v, int num
 
 	std::uint8_t* udp_header = ip_header + 20;
 
-	memcpy(&udp_header[0], &from->sin_port, 2);
+	if (from->sin_port == 0)
+	{
+		// we need to make up a source port here if our
+		// listen port is 0 (i.e. in "promiscuous" mode)
+		// this essentially only happens in the load test
+		uint16_t port = htons(6881);
+		memcpy(&udp_header[0], &port, 2);
+	}
+	else
+	{
+		memcpy(&udp_header[0], &from->sin_port, 2);
+	}
 	memcpy(&udp_header[2], &to->sin_port, 2);
 	udp_header[4] = (buf_size + 8) >> 8;
 	udp_header[5] = (buf_size + 8) & 0xff;
