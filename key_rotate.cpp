@@ -38,7 +38,9 @@ void key_rotate::tick()
 	std::uint32_t next_cur = (m_current.load() + 1 ) % 3;
 
 	std::random_device dev;
-	std::generate(m_secrets[next_cur].key.begin(), m_secrets[next_cur].key.end(), std::ref(dev));
+	std::generate(m_secrets[next_cur].key.begin()
+		, m_secrets[next_cur].key.end()
+		, std::ref(dev));
 	m_current = next_cur;
 }
 

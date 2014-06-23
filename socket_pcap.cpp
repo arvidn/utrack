@@ -187,10 +187,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
 		{
 			if (a->addr->sa_family != AF_LINK || a->addr->sa_data == nullptr)
-			{
-				printf("addr: %d\n", a->addr->sa_family);
 				continue;
-			}
 
 			sockaddr_dl* link = (struct sockaddr_dl*)a->addr;
 			memcpy(m_eth_addr.addr, LLADDR(link), 6);
@@ -858,5 +855,25 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 void packet_socket::local_endpoint(sockaddr_in* addr)
 {
 	*addr = m_our_addr;
+}
+
+void packet_socket::add_arp_entry(sockaddr_in const* addr
+	, address_eth const& mac)
+{
+	uint8_t* ip = (uint8_t*)&addr->sin_addr.s_addr;
+	printf("adding ARP entry: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n"
+		, ip[0]
+		, ip[1]
+		, ip[2]
+		, ip[3]
+		, mac.addr[0]
+		, mac.addr[1]
+		, mac.addr[2]
+		, mac.addr[3]
+		, mac.addr[4]
+		, mac.addr[5]
+		);
+
+	m_arp_cache[addr->sin_addr.s_addr] = mac;
 }
 

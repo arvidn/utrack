@@ -31,6 +31,14 @@ Copyright (C) 2010-2014 Arvid Norberg
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+
+#include <sys/sysctl.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <net/if_types.h>
+#include <net/route.h>
+#include <netinet/if_ether.h>
+
 #else
 #include <winsock2.h>
 #endif
@@ -263,7 +271,50 @@ int main(int argc, char* argv[])
 #ifdef USE_SYSTEM_SEND_SOCKET
 	packet_socket sock(argv[1], 14334);
 #else
+
+	address_eth mac;
+
+	// we need to find out the MAC address of the destination computer
+	// since we're sending raw ethernet frames. This works on OSX and BSD:
+
+	struct sockaddr_dl *sdl;
+
+	int mib[6] = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO};
+	std::vector<char> buf;
+
+	size_t needed;
+	if (sysctl(mib, 6, NULL, &needed, NULL, 0) < 0)
+	{
+		fprintf(stderr, "sysctl: (%d) %s\n", errno, strerror(errno));
+		exit(1);
+	}
+
+	buf.resize(needed);
+
+	if (sysctl(mib, 6, buf.data(), &needed, NULL, 0) < 0)
+	{
+		fprintf(stderr, "sysctl: (%d) %s\n", errno, strerror(errno));
+		exit(1);
+	}
+
+#define ROUNDUP(a) \
+		((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
+
+	char* lim = buf.data() + needed;
+	rt_msghdr *rtm;
+	for (char* next = buf.data(); next < lim; next += rtm->rtm_msglen) {
+		rtm = (rt_msghdr *)next;
+		sockaddr_inarp* sin = (sockaddr_inarp *)(rtm + 1);
+		sdl = (sockaddr_dl*)((char*)sin + ROUNDUP(sin->sin_len));
+		if (to.sin_addr.s_addr != sin->sin_addr.s_addr)
+			continue;
+
+		memcpy(mac.addr, LLADDR(sdl), 6);
+	}
+	buf.clear();
+
 	packet_socket sock(argv[1], 0);
+	sock.add_arp_entry(&to, mac);
 #endif
 	packet_buffer send_buffer(sock);
 
@@ -277,7 +328,7 @@ int main(int argc, char* argv[])
 	sockaddr_in ep;
 	sock.local_endpoint(&ep);
 	bool loopback = (ep.sin_addr.s_addr == htonl(0x7f000001));
-	printf("loopback address\n");
+	if (loopback) printf("loopback address\n");
 
 	clock::time_point start = clock::now();
 

@@ -68,6 +68,8 @@ struct packet_socket
 	// fills in the in_packets array with incoming packets. Returns the number filled in
 	int receive(incoming_packet_t* in_packets, int num);
 
+	void add_arp_entry(sockaddr_in const* addr, address_eth const& mac);
+
 private:
 
 	pcap_t* m_pcap;

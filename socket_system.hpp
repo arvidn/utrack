@@ -39,6 +39,8 @@ struct packet_socket
 
 	void local_endpoint(sockaddr_in* addr);
 
+	void add_arp_entry(sockaddr_in const* addr, address_eth const& mac) {}
+
 	// fills in the in_packets array with incoming packets. Returns the number filled in
 	int receive(incoming_packet_t* in_packets, int num);
 private:
