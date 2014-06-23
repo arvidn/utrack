@@ -42,12 +42,14 @@ rule pcap ( properties * )
 }
 
 lib ws2 : : <name>ws2_32 ;
+lib iphlp : : <name>iphlpapi ;
 
 exe udp_test : test_announce.cpp
 	:
 	<pcap>on
 	<conditional>@pcap
 	<target-os>windows:<library>ws2
+	<target-os>windows:<library>iphlp
 	:
 	;
 
@@ -63,6 +65,7 @@ exe utrack
 	receive_thread.cpp
 	:
 	<target-os>windows:<library>ws2
+	<target-os>windows:<library>iphlp
 	<conditional>@pcap
 	;
 
