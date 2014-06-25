@@ -287,7 +287,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		program_text += std::to_string(listen_port);
 
 		char buf[100];
-		program_text += " and host ";
+		program_text += " and dst host ";
 		program_text += inet_ntop(AF_INET, &m_our_addr.sin_addr.s_addr
 			, buf, sizeof(buf));
 	}
@@ -338,8 +338,8 @@ bool packet_socket::send(packet_buffer& packets)
 
 	if (m_send_cursor + packets.m_send_cursor > m_send_buffer.size())
 	{
-//		printf("(dropping %d kiB)\n"
-//			, packets.m_send_cursor / 1024);
+		printf("(dropping %d kiB)\n"
+			, packets.m_send_cursor / 1024);
 		packets.m_send_cursor = 0;
 		return false;
 	}
