@@ -297,6 +297,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 
 void packet_socket::local_endpoint(sockaddr_in* addr)
 {
-	getpeername(m_socket, addr, sizeof(sockaddr_in));
+	socklen_t len;
+	getpeername(m_socket, (sockaddr*)addr, &len);
 }
 

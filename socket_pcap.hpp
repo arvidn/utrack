@@ -42,13 +42,6 @@ enum {
 
 struct packet_buffer;
 
-struct address_eth
-{
-	address_eth() { memset(addr, 0, sizeof(addr)); }
-	explicit address_eth(uint8_t const* ptr) { memcpy(addr, ptr, sizeof(addr)); }
-	uint8_t addr[6];
-};
-
 struct packet_socket
 {
 	friend struct packet_buffer;

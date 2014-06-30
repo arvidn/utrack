@@ -44,6 +44,13 @@ typedef int socklen_t;
 
 #endif
 
+struct address_eth
+{
+	address_eth() { memset(addr, 0, sizeof(addr)); }
+	explicit address_eth(uint8_t const* ptr) { memcpy(addr, ptr, sizeof(addr)); }
+	uint8_t addr[6];
+};
+
 struct incoming_packet_t
 {
 	sockaddr_storage from;
