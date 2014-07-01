@@ -6,6 +6,8 @@
 
 #ifdef _WIN32
 #include <winsock2.h> // for ntohl
+#else
+#include <arpa/inet.h> // for ntohl
 #endif
 
 #include "config.hpp"

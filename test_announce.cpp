@@ -34,10 +34,14 @@ Copyright (C) 2010-2014 Arvid Norberg
 
 #include <sys/sysctl.h>
 #include <net/if.h>
-#include <net/if_dl.h>
-#include <net/if_types.h>
 #include <net/route.h>
 #include <netinet/if_ether.h>
+
+#ifdef __linux__
+#else
+#include <net/if_dl.h>
+#include <net/if_types.h>
+#endif
 
 #else
 #include <winsock2.h>
@@ -94,7 +98,7 @@ void send_connect(sockaddr_in const* to, packet_buffer& buf, bool loopback)
 		sockaddr_in from;
 		from.sin_family = AF_INET;
 		from.sin_port = htons(1024 + idx);
-#ifndef _WIN32
+#if !defined _WIN32 && !defined __linux__
 		from.sin_len = sizeof(sockaddr_in);
 #endif
 		from.sin_addr.s_addr = htonl(0x7f000001 + idx);
@@ -130,7 +134,7 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 		sockaddr_in from;
 		from.sin_family = AF_INET;
 		from.sin_port = htons(1024 + idx);
-#ifndef _WIN32
+#if !defined _WIN32 && !defined __linux__
 		from.sin_len = sizeof(sockaddr_in);
 #endif
 		from.sin_addr.s_addr = htonl(0x7f000001 + idx);
@@ -255,7 +259,7 @@ int main(int argc, char* argv[])
 
 	sockaddr_in to;
 	memset(&to, 0, sizeof(to));
-#ifndef _WIN32
+#if !defined _WIN32 && !defined __linux__
 	to.sin_len = sizeof(to);
 #endif
 	to.sin_family = AF_INET;

@@ -16,6 +16,7 @@ Copyright (C) 2014  Arvid Norberg
 */
 
 #include <random>
+#include <algorithm> // for generate
 #include "key_rotate.hpp"
 
 using std::chrono::steady_clock;

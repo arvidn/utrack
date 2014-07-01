@@ -24,6 +24,7 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <chrono>
 #include <random>
 #include <cstdlib> // for rand()
+#include <algorithm> // for generate
 
 #include <signal.h>
 

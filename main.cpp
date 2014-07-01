@@ -21,6 +21,7 @@ Copyright (C) 2010-2014  Arvid Norberg
 
 #ifdef __linux__
 #include <pthread.h>
+#include <sched.h>
 #endif
 
 #ifndef _WIN32
@@ -29,7 +30,6 @@ Copyright (C) 2010-2014  Arvid Norberg
 #include <netinet/in.h>
 #include <arpa/inet.h> // for inet_ntop
 #include <unistd.h>
-#include <net/if_dl.h> // for sockaddr_dl
 #else
 #include <winsock2.h>
 #endif
@@ -216,7 +216,7 @@ int main(int argc, char* argv[])
 	// announce threads as we have cores on the machine
 	printf("starting %d announce threads\n", num_cores);
 #if defined __linux__
-	cpu_set_ti* cpu = CPU_ALLOC(num_cores);
+	cpu_set_t* cpu = CPU_ALLOC(num_cores);
 #endif
 	for (int i = 0; i < num_cores; ++i)
 	{
@@ -228,7 +228,7 @@ int main(int argc, char* argv[])
 
 #if defined __linux__
 		std::thread::native_handle_type h = announce_threads.back()->native_handle();
-		CPU_CLEAR(cpu);
+		CPU_ZERO(cpu);
 		CPU_SET(i, cpu);
 		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
 #else
@@ -250,8 +250,8 @@ int main(int argc, char* argv[])
 #endif
 
 #if defined __linux__
-		std::thread::native_handle_type h = receive_threads.back().native_handle();
-		CPU_CLEAR(cpu);
+		std::thread::native_handle_type h = receive_threads.back()->native_handle();
+		CPU_ZERO(cpu);
 		CPU_SET(i, cpu);
 		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
 #else

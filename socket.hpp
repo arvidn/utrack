@@ -24,6 +24,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <vector>
 #include <array>
 #include <mutex>
+#include <string.h> // for memset
 
 #ifdef _WIN32
 

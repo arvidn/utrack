@@ -36,10 +36,15 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <sys/socket.h> // for iovec
 #include <netinet/in.h> // for sockaddr
 #include <net/if.h> // for ifreq
-#include <sys/sockio.h> // for SIOCGIFADDR
 #include <sys/ioctl.h>
-#include <net/if_dl.h> // for sockaddr_dl
 #include <arpa/inet.h> // for inet_ntop
+
+#ifdef __linux__
+#include <sys/ioctl.h> // for SIOCGIFADDR
+#else
+#include <sys/sockio.h> // for SIOCGIFADDR
+#include <net/if_dl.h> // for sockaddr_dl
+#endif
 #endif
 
 #include <atomic>
@@ -112,14 +117,14 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	}
 
 	m_our_addr.sin_family = AF_INET;
-#ifndef _WIN32
+#if !defined _WIN32 && !defined __linux__
 	m_our_addr.sin_len = sizeof(sockaddr_in);
 #endif
 	m_our_addr.sin_addr.s_addr = ip;
 	m_our_addr.sin_port = htons(listen_port);
 
 	m_mask.sin_family = AF_INET;
-#ifndef _WIN32
+#if !defined _WIN32 && !defined __linux__
 	m_mask.sin_len = sizeof(sockaddr_in);
 #endif
 	m_mask.sin_addr.s_addr = mask;
@@ -230,8 +235,22 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		, (mask >> 8) & 0xff
 		, mask & 0xff);
 
-#ifdef _WIN32
+#if defined _WIN32
 	// find the ethernet address for device
+#elif defined __linux__
+	
+	{
+		ifreq ifr;
+
+		int fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+		ifr.ifr_addr.sa_family = AF_INET;
+		strcpy(ifr.ifr_name, device);
+		ioctl(fd, SIOCGIFHWADDR, &ifr);
+		::close(fd);
+
+		memcpy(m_eth_addr.addr, ifr.ifr_hwaddr.sa_data, 6);
+	}
 
 #else
 	pcap_if_t *alldevs;
@@ -692,7 +711,7 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* h
 	// copy from IP header
 	memset(&pkt.from, 0, sizeof(pkt.from));
 	sockaddr_in* from = (sockaddr_in*)&pkt.from;
-#ifndef _WIN32
+#if !defined _WIN32 && !defined __linux__
 	from->sin_len = sizeof(sockaddr_in);
 #endif
 	from->sin_family = AF_INET;
@@ -777,7 +796,7 @@ void packet_socket::send_thread()
 	bind_addr.sin_family = AF_INET;
 	bind_addr.sin_addr.s_addr = INADDR_ANY;
 	bind_addr.sin_port = m_our_addr.sin_port;
-	int r = bind(sock, (sockaddr*)&d_addr, sizeof(bind_addr));
+	int r = bind(sock, (sockaddr*)&bind_addr, sizeof(bind_addr));
 	if (r < 0)
 	{
 		fprintf(stderr, "failed to bind send socket to port %d (%d): %s\n"
