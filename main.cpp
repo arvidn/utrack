@@ -133,6 +133,13 @@ int main(int argc, char* argv[])
 			exit(1);
 		}
 
+		if (alldevs == nullptr)
+		{
+			printf("no available devices. You may need root privileges\n");
+			exit(1);
+
+		}
+
 		for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
 		{
 			printf("%s\n", d->name);
@@ -217,6 +224,11 @@ int main(int argc, char* argv[])
 	printf("starting %d announce threads\n", num_cores);
 #if defined __linux__
 	cpu_set_t* cpu = CPU_ALLOC(num_cores);
+	if (cpu == nullptr)
+	{
+		fprintf(stderr, "CPU_ALLOC failed!\n");
+		exit(1);
+	}
 #endif
 	for (int i = 0; i < num_cores; ++i)
 	{
@@ -230,8 +242,13 @@ int main(int argc, char* argv[])
 		std::thread::native_handle_type h = announce_threads.back()->native_handle();
 		CPU_ZERO(cpu);
 		CPU_SET(i, cpu);
-		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
-#else
+		int r = pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
+		if (r != 0)
+		{
+			fprintf(stderr, "pthread_setaffinity() = %d: (%d) %s\n"
+				, r, errno, strerror(errno));
+			exit(1);
+		}
 #endif
 	}
 
@@ -253,13 +270,15 @@ int main(int argc, char* argv[])
 		std::thread::native_handle_type h = receive_threads.back()->native_handle();
 		CPU_ZERO(cpu);
 		CPU_SET(i, cpu);
-		pthread_setaffinity_np(h, CPU_ALLOC_SIZE(std::thread::hardware_concurrency()), cpu);
-#else
+		int r = pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
+		if (r != 0)
+		{
+			fprintf(stderr, "pthread_setaffinity() = %d: (%d) %s\n"
+				, r, errno, strerror(errno));
+			exit(1);
+		}
 #endif
 	}
-#if defined __linux__
-	CPU_FREE(cpu);
-#endif
 
 	while (!quit)
 	{
@@ -286,5 +305,8 @@ int main(int argc, char* argv[])
 	for (announce_thread* i : announce_threads)
 		delete i;
 
+#if defined __linux__
+	CPU_FREE(cpu);
+#endif
 	return EXIT_SUCCESS;
 }
