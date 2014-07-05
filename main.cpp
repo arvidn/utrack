@@ -84,7 +84,7 @@ BOOL WINAPI sigint(DWORD s)
 void sigint(int s)
 #endif
 {
-	fprintf(stderr, "shutting down\n");
+	printf("shutting down\n");
 	quit = true;
 
 #ifdef _WIN32
@@ -94,8 +94,8 @@ void sigint(int s)
 
 void print_usage()
 {
-	printf("usage:\nutrack device [port]\n\n"
-		"   device       the network device to listen on\n"
+	printf("usage:\nutrack bind-ip [port]\n\n"
+		"   bind-ip      the IP address of the network device to listen on\n"
 		"   port         the UDP port to listen on (defaults to 80)\n"
 		"\n"
 #ifdef USE_PCAP
@@ -122,45 +122,10 @@ static struct wsa_init_t {
 int main(int argc, char* argv[])
 {
 #ifdef USE_PCAP
+	bool list_devices = false;
 	if (argc == 2 && strcmp(argv[1], "--list-devices") == 0)
 	{
-		pcap_if_t *alldevs;
-		char error_msg[PCAP_ERRBUF_SIZE];
-		int r = pcap_findalldevs(&alldevs, error_msg);
-		if (r != 0)
-		{
-			printf("pcap_findalldevs() = %d \"%s\"\n", r, error_msg);
-			exit(1);
-		}
-
-		if (alldevs == nullptr)
-		{
-			printf("no available devices. You may need root privileges\n");
-			exit(1);
-
-		}
-
-		for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
-		{
-			printf("%s\n", d->name);
-			for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
-			{
-				char buf[100];
-				switch (a->addr->sa_family)
-				{
-					case AF_INET:
-						printf("   %s\n", inet_ntop(AF_INET
-							, &((sockaddr_in*)a->addr)->sin_addr, buf, sizeof(buf)));
-						break;
-					case AF_INET6:
-						printf("   %s\n", inet_ntop(AF_INET6
-							, &((sockaddr_in6*)a->addr)->sin6_addr, buf, sizeof(buf)));
-						break;
-				}
-			}
-		}
-		pcap_freealldevs(alldevs);
-		return 0;
+		list_devices = true;
 	}
 #endif // USE_PCAP
 
@@ -179,9 +144,75 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 
-	char const* device = argv[1];
-	fprintf(stderr, "listening on UDP port %d on device %s\n"
+	char const* bind_ip = argv[1];
+	int r;
+
+#ifdef USE_PCAP
+	char device[200];
+	device[0] = '\0';
+
+	pcap_if_t *alldevs;
+	char error_msg[PCAP_ERRBUF_SIZE];
+	r = pcap_findalldevs(&alldevs, error_msg);
+	if (r != 0)
+	{
+		printf("pcap_findalldevs() = %d \"%s\"\n", r, error_msg);
+		exit(1);
+	}
+
+	if (alldevs == nullptr)
+	{
+		printf("no available devices. You may need root privileges\n");
+		exit(1);
+
+	}
+
+	for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
+	{
+		if (list_devices)
+			printf("%s\n", d->name);
+
+		for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
+		{
+			char buf[100];
+			switch (a->addr->sa_family)
+			{
+				case AF_INET:
+					inet_ntop(AF_INET
+						, &((sockaddr_in*)a->addr)->sin_addr, buf, sizeof(buf));
+					if (list_devices)
+						printf("   %s\n", buf);
+					if (strcmp(buf, bind_ip) == 0)
+						strcpy(device, d->name);
+					break;
+				case AF_INET6:
+					inet_ntop(AF_INET6
+						, &((sockaddr_in6*)a->addr)->sin6_addr, buf, sizeof(buf));
+					if (list_devices)
+						printf("   %s\n", buf);
+					if (strcmp(buf, bind_ip) == 0)
+						strcpy(device, d->name);
+					break;
+			}
+		}
+	}
+	pcap_freealldevs(alldevs);
+
+	if (list_devices) return 0;
+
+	if (device[0] == '\0')
+	{
+		fprintf(stderr, "no device with ip: %s\nuse --list-devices to list them\n"
+			, bind_ip);
+		return 1;
+	}
+
+	printf("listening on UDP port %d on device %s\n"
 		, listen_port, device);
+#else
+	printf("listening on UDP port %d on IP %s\n"
+		, listen_port, bind_ip);
+#endif
 	
 	std::vector<announce_thread*> announce_threads;
 	std::vector<receive_thread*> receive_threads;
@@ -193,7 +224,7 @@ int main(int argc, char* argv[])
 	struct sigaction sa;
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = &sigint;
-	int r = sigaction(SIGINT, &sa, 0);
+	r = sigaction(SIGINT, &sa, 0);
 	if (r == -1)
 	{
 		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
@@ -205,7 +236,7 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "sigaction failed (%d): %s\n", errno, strerror(errno));
 		quit = true;
 	}
-	if (!quit) fprintf(stderr, "send SIGINT or SIGTERM to quit\n");
+	if (!quit) printf("send SIGINT or SIGTERM to quit\n");
 #else
 	if (SetConsoleCtrlHandler(&sigint, TRUE) == FALSE)
 	{

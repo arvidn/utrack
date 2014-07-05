@@ -187,12 +187,15 @@ void incoming_packet(char const* buf, int size
 
 			++connects;
 			send_announce(idx, resp->connection_id, from, send_buffer, loopback);
+			if ((idx & 0x1) == 0)
+				send_announce(idx, resp->connection_id, from, send_buffer, loopback);
+
 			send_connect(from, send_buffer, loopback);
 
 			// every 4th connect response, send an additional connect, to
 			// keep ramping up the conect rate indefinitely (until we bump
 			// up against the capacity and packets are lost)
-			if ((idx & 0x3) == 0) send_connect(from, send_buffer, loopback);
+			send_connect(from, send_buffer, loopback);
 			break;
 		}
 	}
@@ -336,7 +339,7 @@ int main(int argc, char* argv[])
 
 	clock::time_point start = clock::now();
 
-	for (int i = 0; i < 1000; ++i)
+	for (int i = 0; i < 10000; ++i)
 		send_connect(&to, send_buffer, loopback);
 	sock.send(send_buffer);
 
