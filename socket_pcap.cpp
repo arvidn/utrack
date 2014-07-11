@@ -673,8 +673,9 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* h
 	// version and length. Ignore any non IPv4 packets and any packets
 	// with IP options headers
 	if (ip_header[0] != 0x45) {
-		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
-			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
+		// this is noisy, don't print out for every IPv6 packet
+//		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
+//			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
 		return;
 	}
 
