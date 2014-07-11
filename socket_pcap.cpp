@@ -492,6 +492,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 				(from->sin_addr.s_addr & m_mask.sin_addr.s_addr))
 				dst = 0;
 
+			assert(m_arp_cache.count(dst) > 0);
 			address_eth const& mac = m_arp_cache[dst];
 
 			memcpy(ptr, mac.addr, 6);
