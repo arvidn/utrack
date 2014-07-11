@@ -237,6 +237,38 @@ packet_socket::packet_socket(char const* device, int listen_port)
 
 #if defined _WIN32
 	// find the ethernet address for device
+	PIP_ADAPTER_ADDRESSES adapter_addresses = 0;
+	ULONG out_buf_size = 0;
+	if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+		| GAA_FLAG_SKIP_ANYCAST, NULL, adapter_addresses, &out_buf_size) != ERROR_BUFFER_OVERFLOW)
+	{
+		fprintf(stderr, "GetAdaptersAddresses() failed: %d\n", GetLastError());
+		exit(1);
+	}
+
+	adapter_addresses = (IP_ADAPTER_ADDRESSES*)malloc(out_buf_size);
+	if (!adapter_addresses)
+	{
+		fprintf(stderr, "malloc(%d) failed\n", out_buf_size);
+		exit(1);
+	}
+
+	if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+		| GAA_FLAG_SKIP_ANYCAST, NULL, adapter_addresses, &out_buf_size) == NO_ERROR)
+	{
+		char const* name = strchr(device, '{');
+		for (PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
+			adapter != 0; adapter = adapter->Next)
+		{
+			if (strcmp(name, adapter->AdapterName) != 0) continue;
+
+			memcpy(m_eth_addr.addr, adapter->PhysicalAddress, 6);
+			break;
+		}
+	}
+
+	// Free memory
+	free(adapter_addresses);
 #elif defined __linux__
 	
 	{
