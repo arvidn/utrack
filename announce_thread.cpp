@@ -23,7 +23,6 @@ Copyright (C) 2010-2013  Arvid Norberg
 #include <atomic>
 #include <chrono>
 #include <random>
-#include <cstdlib> // for rand()
 #include <algorithm> // for generate
 
 #include <signal.h>
@@ -82,6 +81,10 @@ void announce_thread::thread_fun()
 		fprintf(stderr, "pthread_sigmask failed (%d): %s\n", errno, strerror(errno));
 	}
 #endif
+
+	std::random_device dev;
+	std::mt19937 mt_engine(dev());
+	std::uniform_int_distribution<int> rand(0, 240);
 
 	// this is the queue the other one is swapped into
 	// and then drained without needing to hold the mutex
@@ -150,12 +153,13 @@ void announce_thread::thread_fun()
 
 					resp.action = htonl(action_announce);
 					resp.transaction_id = m.bits.announce.transaction_id;
-					// TODO: use a c++11 random function, or something more efficient
-					resp.interval = htonl(1680 + std::rand() * 240 / RAND_MAX);
+					resp.interval = htonl(1680 + rand(mt_engine));
 
 					// do the actual announce with the swarm
 					// and get a pointer to the peers back
-					s.announce(now, &m.bits.announce, &buf, &len, &resp.downloaders, &resp.seeds);
+					s.announce(now, &m.bits.announce, &buf, &len, &resp.downloaders
+						, &resp.seeds, mt_engine);
+
 					++announces;
 
 					// now turn these counters into network byte order

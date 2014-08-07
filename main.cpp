@@ -45,7 +45,6 @@ Copyright (C) 2010-2014  Arvid Norberg
 #include <unordered_map>
 #include <deque>
 #include <system_error>
-#include <cstdlib> // for rand()
 
 #include "swarm.hpp"
 #include "endian.hpp"

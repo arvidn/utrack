@@ -30,10 +30,13 @@ void swarm::scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* download
 
 void swarm::announce(steady_clock::time_point now, udp_announce_message const* hdr
 	, char** buf, int* len
-	, uint32_t* downloaders, uint32_t* seeds)
+	, uint32_t* downloaders, uint32_t* seeds
+	, std::mt19937& mt_engine)
 {
 	*seeds = m_seeds;
 	*downloaders = m_downloaders;
+	std::uniform_int_distribution<int> rand(0, 1);
+	typedef std::uniform_int_distribution<int>::param_type pair;
 
 	m_last_announce = now;
 
@@ -71,7 +74,7 @@ void swarm::announce(steady_clock::time_point now, udp_announce_message const* h
 		{
 			// remove one random peer
 			hash_map4_t::iterator del = m_peers4.begin();
-			std::advance(del, rand() % m_peers4.size());
+			std::advance(del, rand(mt_engine, pair(0, m_peers4.size() - 1)));
 			erase_peer(del);
 		}
 
@@ -161,9 +164,9 @@ void swarm::announce(steady_clock::time_point now, udp_announce_message const* h
 		else
 		{
 			// TODO: this is sub-optimal since it doesn't wrap
-			int random = rand() % m_ips4.size();
-			*buf = (char*)&m_ips4[random];
-			*len = (std::min)(m_ips4.size() - random, num_want) * 6;
+			int cursor = rand(mt_engine, pair(0, m_peers4.size() - 1 - num_want));
+			*buf = (char*)&m_ips4[cursor];
+			*len = num_want * 6;
 		}
 	}
 }

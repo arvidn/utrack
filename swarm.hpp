@@ -6,6 +6,7 @@
 #include <thread>
 #include <unordered_map>
 #include <chrono>
+#include <random>
 
 using std::chrono::steady_clock;
 using std::chrono::seconds;
@@ -54,7 +55,9 @@ struct swarm
 	swarm();
 	void announce(steady_clock::time_point now, udp_announce_message const* hdr
 		, char** buf, int* len
-		, uint32_t* downloaders, uint32_t* seeds);
+		, uint32_t* downloaders, uint32_t* seeds
+		, std::mt19937& mt_engine);
+
 	void scrape(uint32_t* seeds, uint32_t* download_count, uint32_t* downloaders);
 
 	void purge_stale(steady_clock::time_point now);
