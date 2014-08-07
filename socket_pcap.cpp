@@ -67,7 +67,9 @@ packet_socket::packet_socket(char const* device, int listen_port)
 #endif
 {
 	m_buffer.resize(receive_buffer_size);
-#ifndef USE_WINPCAP
+#ifdef USE_WINPCAP
+	m_send_buffer.reserve(21);
+#else
 	m_send_buffer.resize(send_buffer_size);
 #endif
 
@@ -237,6 +239,38 @@ packet_socket::packet_socket(char const* device, int listen_port)
 
 #if defined _WIN32
 	// find the ethernet address for device
+	PIP_ADAPTER_ADDRESSES adapter_addresses = 0;
+	ULONG out_buf_size = 0;
+	if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+		| GAA_FLAG_SKIP_ANYCAST, NULL, adapter_addresses, &out_buf_size) != ERROR_BUFFER_OVERFLOW)
+	{
+		fprintf(stderr, "GetAdaptersAddresses() failed: %d\n", GetLastError());
+		exit(1);
+	}
+
+	adapter_addresses = (IP_ADAPTER_ADDRESSES*)malloc(out_buf_size);
+	if (!adapter_addresses)
+	{
+		fprintf(stderr, "malloc(%d) failed\n", out_buf_size);
+		exit(1);
+	}
+
+	if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+		| GAA_FLAG_SKIP_ANYCAST, NULL, adapter_addresses, &out_buf_size) == NO_ERROR)
+	{
+		char const* name = strchr(device, '{');
+		for (PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
+			adapter != 0; adapter = adapter->Next)
+		{
+			if (strcmp(name, adapter->AdapterName) != 0) continue;
+
+			memcpy(m_eth_addr.addr, adapter->PhysicalAddress, 6);
+			break;
+		}
+	}
+
+	// Free memory
+	free(adapter_addresses);
 #elif defined __linux__
 	
 	{
@@ -322,17 +356,19 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (r == -1)
 		fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
-#ifndef USE_WINPCAP
 	for (int i = 0; i < 3; ++i)
 		m_send_threads.emplace_back(&packet_socket::send_thread, this);
-#endif
 }
 
 packet_socket::~packet_socket()
 {
 	close();
-#ifndef USE_WINPCAP
 	for (auto& t : m_send_threads) t.join();
+#ifdef USE_WINPCAP
+	for (auto i : m_free_list)
+		pcap_sendqueue_destroy(i);
+	for (auto i : m_send_buffer)
+		pcap_sendqueue_destroy(i);
 #endif
 	if (m_pcap) pcap_close(m_pcap);
 }
@@ -347,9 +383,38 @@ void packet_socket::close()
 bool packet_socket::send(packet_buffer& packets)
 {
 #ifdef USE_WINPCAP
-	int r = pcap_sendqueue_transmit(m_pcap, packets.m_queue, 0);
-	if (r < 0)
-		fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+	assert(packets.m_queue != 0);
+	std::unique_lock<std::mutex> l(m_mutex);
+	if (m_send_buffer.size() > 20)
+	{
+		l.unlock();
+
+		// if the send queue is too large, just send
+		// it synchronously
+		int r = pcap_sendqueue_transmit(m_pcap, packets.m_queue, 0);
+		if (r < 0)
+			fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+		return true;
+	}
+
+	assert(packets.m_queue != NULL);
+	m_send_buffer.push_back(packets.m_queue);
+	if (!m_free_list.empty())
+	{
+		packets.m_queue = m_free_list.back();
+		m_free_list.erase(m_free_list.end()-1);
+	}
+	else
+	{
+		l.unlock();
+		packets.m_queue = pcap_sendqueue_alloc(0x100000);
+		if (packets.m_queue == NULL)
+		{
+			fprintf(stderr, "failed to allocate send queue\n");
+			exit(1);
+		}
+	}
+	return true;
 #else
 	std::lock_guard<std::mutex> l(m_mutex);
 
@@ -389,7 +454,15 @@ packet_buffer::packet_buffer(packet_socket& s)
 #else
 	, m_buf(0x100000)
 #endif
-{}
+{
+#ifdef USE_WINPCAP
+	if (m_queue == NULL)
+	{
+		fprintf(stderr, "failed to allocate send queue\n");
+		exit(1);
+	}
+#endif
+}
 
 packet_buffer::~packet_buffer()
 {
@@ -460,6 +533,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 				(from->sin_addr.s_addr & m_mask.sin_addr.s_addr))
 				dst = 0;
 
+			assert(m_arp_cache.count(dst) > 0);
 			address_eth const& mac = m_arp_cache[dst];
 
 			memcpy(ptr, mac.addr, 6);
@@ -641,8 +715,9 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* h
 	// version and length. Ignore any non IPv4 packets and any packets
 	// with IP options headers
 	if (ip_header[0] != 0x45) {
-		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
-			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
+		// this is noisy, don't print out for every IPv6 packet
+//		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
+//			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
 		return;
 	}
 
@@ -761,7 +836,58 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* h
 	}
 }
 
-#ifndef USE_WINPCAP
+#ifdef USE_WINPCAP
+void packet_socket::send_thread()
+{
+	std::vector<pcap_send_queue*> local_buffer;
+
+	// exponential back-off. The more read operations that return
+	// no packets, the longer we wait until we read again. This
+	// balances CPU usage when idle with wasting less time when busy
+	const static int sleep_timers[] = {0, 1, 5, 10, 50, 100, 500};
+	int sleep = 0;
+	while (!m_closed)
+	{
+		if (sleep > 0)
+		{
+			// we did not see any packets in the buffer last cycle
+			// through. sleep for a while to see if there are any in
+			// a little bit
+//			printf("sleep %d ms\n", sleep_timers[sleep-1]);
+			std::this_thread::sleep_for(
+				std::chrono::milliseconds(sleep_timers[sleep-1]));
+		}
+
+		{
+			std::lock_guard<std::mutex> l(m_mutex);
+			if (m_send_buffer.empty())
+			{
+				if (sleep < sizeof(sleep_timers)/sizeof(sleep_timers[0]))
+					++sleep;
+				continue;
+			}
+
+
+			local_buffer.swap(m_send_buffer);
+		}
+
+		sleep = 0;
+
+		for (auto i : local_buffer)
+		{
+			int r = pcap_sendqueue_transmit(m_pcap, i, 0);
+			if (r < 0)
+				fprintf(stderr, "pcap_setfilter() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+
+
+			std::lock_guard<std::mutex> l(m_mutex);
+			m_free_list.push_back(i);
+		}
+		local_buffer.clear();
+	}
+
+}
+#else
 void packet_socket::send_thread()
 {
 	std::vector<uint8_t> local_buffer;
@@ -826,7 +952,8 @@ void packet_socket::send_thread()
 			// through. sleep for a while to see if there are any in
 			// a little bit
 //			printf("sleep %d ms\n", sleep_timers[sleep-1]);
-			std::this_thread::sleep_for(std::chrono::milliseconds(sleep_timers[sleep-1]));
+			std::this_thread::sleep_for(
+				std::chrono::milliseconds(sleep_timers[sleep-1]));
 		}
 
 		{

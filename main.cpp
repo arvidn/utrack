@@ -259,6 +259,7 @@ int main(int argc, char* argv[])
 		fprintf(stderr, "CPU_ALLOC failed!\n");
 		exit(1);
 	}
+	int cpu_size = CPU_ALLOC_SIZE(num_cores);
 #endif
 	for (int i = 0; i < num_cores; ++i)
 	{
@@ -270,8 +271,8 @@ int main(int argc, char* argv[])
 
 #if defined __linux__
 		std::thread::native_handle_type h = announce_threads.back()->native_handle();
-		CPU_ZERO(cpu);
-		CPU_SET(i, cpu);
+		CPU_ZERO_S(cpu_size, cpu);
+		CPU_SET_S(i, cpu_size, cpu);
 		int r = pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
 		if (r != 0)
 		{
@@ -298,8 +299,8 @@ int main(int argc, char* argv[])
 
 #if defined __linux__
 		std::thread::native_handle_type h = receive_threads.back()->native_handle();
-		CPU_ZERO(cpu);
-		CPU_SET(i, cpu);
+		CPU_ZERO_S(cpu_size, cpu);
+		CPU_SET_S(i, cpu_size, cpu);
 		int r = pthread_setaffinity_np(h, CPU_ALLOC_SIZE(num_cores), cpu);
 		if (r != 0)
 		{

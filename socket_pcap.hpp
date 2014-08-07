@@ -85,11 +85,20 @@ private:
 	// to the corresponding ethernet address (MAC address)
 	std::unordered_map<uint32_t, address_eth> m_arp_cache;
 
-#ifndef USE_WINPCAP
 	void send_thread();
 
 	// this mutex just protects the send buffer
 	std::mutex m_mutex;
+
+	// the thread that's used to send the packets put in the send queue
+	std::vector<std::thread> m_send_threads;
+
+#ifdef USE_WINPCAP
+
+	std::vector<pcap_send_queue*> m_send_buffer;
+	std::vector<pcap_send_queue*> m_free_list;
+
+#else
 
 	// this contains all packets we want to send as one contiguous array. Each
 	// packet has a 2 byte, host order length prefix, followed by that many
@@ -102,8 +111,6 @@ private:
 	// send buffer
 	int m_send_cursor;
 
-	// the thread that's used to send the packets put in the send queue
-	std::vector<std::thread> m_send_threads;
 #endif
 };
 
