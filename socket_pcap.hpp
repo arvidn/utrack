@@ -107,8 +107,6 @@ private:
 #endif
 };
 
-// TODO: WinPcap has a much more efficient bulk-sending API which would be
-// nice to use
 struct packet_buffer
 {
 	friend struct packet_socket;
