@@ -68,7 +68,6 @@ private:
 	packet_socket& m_sock;
 #else
 	packet_socket m_sock;
-	packet_socket m_send_sock;
 #endif
 	std::vector<announce_thread*> const& m_announce_threads;
 

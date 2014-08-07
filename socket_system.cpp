@@ -150,7 +150,6 @@ packet_socket::packet_socket(packet_socket&& s)
 bool packet_socket::send(packet_buffer& packets)
 {
 	// This is NOP. packets are sent directly when added to packet_buffer.
-	assert(!m_receive);
 	return true;
 }
 
@@ -185,7 +184,7 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 	msg.msg_iovlen = num;
 	msg.msg_control = 0;
 	msg.msg_controllen = 0;
-	msg.msg_flags = 0;
+	msg.msg_flags = MSG_NOSIGNAL;
 #endif
 	// loop just to deal with the potential EINTR
 	do
@@ -194,9 +193,9 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 		int r = sendto(m_socket, ptr, len, 0
 			, (sockaddr const*)to, sizeof(sockaddr_in));
 #else
-		int r = sendmsg(m_socket, &msg, MSG_NOSIGNAL);
+		int r = sendmsg(m_socket, &msg, 0);
 #endif
-		if (r == -1)
+		if (r < 0)
 		{
 			if (errno == EINTR) continue;
 			fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));

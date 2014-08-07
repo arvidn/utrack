@@ -71,7 +71,6 @@ receive_thread::receive_thread(packet_socket& s
 receive_thread::receive_thread(int listen_port
 	, std::vector<announce_thread*> const& at)
 	: m_sock(listen_port, true)
-	, m_send_sock(listen_port)
 	, m_announce_threads(at)
 	, m_thread( [=]() { thread_fun(); } ) {}
 
@@ -80,9 +79,6 @@ receive_thread::receive_thread(int listen_port
 receive_thread::~receive_thread()
 {
 	m_sock.close();
-#ifndef USE_PCAP
-	m_send_sock.close();
-#endif
 	m_thread.join();
 }
 
@@ -106,7 +102,7 @@ void receive_thread::thread_fun()
 #ifdef USE_PCAP
 	packet_buffer send_buffer(m_sock);
 #else
-	packet_buffer send_buffer(m_send_sock);
+	packet_buffer send_buffer(m_sock);
 #endif
 
 	std::vector<std::vector<announce_msg>> announce_buf(m_announce_threads.size());
@@ -124,7 +120,7 @@ void receive_thread::thread_fun()
 #ifdef USE_PCAP
 		m_sock.send(send_buffer);
 #else
-		m_send_sock.send(send_buffer);
+		m_sock.send(send_buffer);
 #endif
 
 		for (int i = 0; i < m_announce_threads.size(); ++i)
