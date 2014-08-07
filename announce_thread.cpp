@@ -170,8 +170,7 @@ void announce_thread::thread_fun()
 					// body with the peer list
 					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
 
-					if (!send_buffer.append(iov, 2, &m.from))
-						return;
+					send_buffer.append(iov, 2, &m.from);
 					break;
 				}
 			case action_scrape:
@@ -193,9 +192,7 @@ void announce_thread::thread_fun()
 					}
 
 					iovec iov = { &resp, 8 + 12};
-					if (!send_buffer.append(&iov, 1, &m.from))
-						return;
-
+					send_buffer.append(&iov, 1, &m.from);
 					break;
 				}
 			}
