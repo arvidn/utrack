@@ -1,5 +1,5 @@
 /*
-Copyright (C) 2010-201$  Arvid Norberg
+Copyright (C) 2010-2014  Arvid Norberg
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -160,6 +160,9 @@ void receive_thread::incoming_packet(char const* buf, int size
 	{
 		case action_connect:
 		{
+			// TODO: increment dropped counter?
+			if (send_buffer.is_full(16)) return;
+
 			if (be64toh(hdr->connection_id) != 0x41727101980LL)
 			{
 				++errors;

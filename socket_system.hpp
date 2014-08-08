@@ -59,6 +59,8 @@ struct packet_buffer
 		: m_socket(s.m_socket)
 	{}
 
+	bool is_full(int buf_size) const { return false; }
+
 	bool append(iovec const* v, int num, sockaddr_in const* to);
 
 private:

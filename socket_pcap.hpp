@@ -126,6 +126,9 @@ struct packet_buffer
 	bool append_impl(iovec const* v, int num, sockaddr_in const* to
 		, sockaddr_in const* from);
 
+	bool is_full(int buf_size) const
+	{ return m_send_cursor + buf_size + 28 + 30 > m_buf.size(); }
+
 private:
 	int m_link_layer;
 #ifndef USE_WINPCAP
