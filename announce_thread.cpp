@@ -56,6 +56,7 @@ std::array<uint8_t, 16> gen_random_key()
 announce_thread::announce_thread(packet_socket& s)
 	: m_sock(s)
 	, m_quit(false)
+	, m_queue_size(0)
 	, m_thread( [=]() { thread_fun(); } )
 {
 	m_queue.reserve(announce_queue_size);
@@ -64,6 +65,7 @@ announce_thread::announce_thread(packet_socket& s)
 announce_thread::announce_thread(int listen_port)
 	: m_sock(listen_port)
 	, m_quit(false)
+	, m_queue_size(0)
 	, m_thread( [=]() { thread_fun(); } )
 {
 	m_queue.reserve(announce_queue_size);
@@ -88,8 +90,7 @@ void announce_thread::thread_fun()
 
 	// this is the queue the other one is swapped into
 	// and then drained without needing to hold the mutex
-	std::vector<announce_msg> queue;
-	queue.reserve(announce_queue_size);
+	std::vector<std::vector<announce_msg>> queue;
 
 	steady_clock::time_point now = steady_clock::now();
 	steady_clock::time_point next_prune = now + seconds(10);
@@ -109,6 +110,7 @@ void announce_thread::thread_fun()
 
 		if (m_quit) break;
 		m_queue.swap(queue);
+		m_queue_size = 0;
 		l.unlock();
 
 		now = steady_clock::now();
@@ -136,64 +138,67 @@ void announce_thread::thread_fun()
 			}
 		}
 
-		for (announce_msg const& m : queue)
+		for (std::vector<announce_msg> const& v : queue)
 		{
-			switch (ntohl(m.bits.announce.action))
+			for (announce_msg const& m : v)
 			{
-				case action_announce:
+				switch (ntohl(m.bits.announce.action))
 				{
-					// find the swarm being announce to
-					// or create it if it doesn't exist
-					swarm& s = m_swarms[m.bits.announce.hash];
-
-					// prepare the buffer to write the response to
-					char* buf;
-					int len;
-					udp_announce_response resp;
-
-					resp.action = htonl(action_announce);
-					resp.transaction_id = m.bits.announce.transaction_id;
-					resp.interval = htonl(1680 + rand(mt_engine));
-
-					// do the actual announce with the swarm
-					// and get a pointer to the peers back
-					s.announce(now, &m.bits.announce, &buf, &len, &resp.downloaders
-						, &resp.seeds, mt_engine);
-
-					++announces;
-
-					// now turn these counters into network byte order
-					resp.downloaders = htonl(resp.downloaders);
-					resp.seeds = htonl(resp.seeds);
-
-					// set up the iovec array for the response. The header + the
-					// body with the peer list
-					iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
-
-					send_buffer.append(iov, 2, &m.from);
-					break;
-				}
-			case action_scrape:
-				{
-					udp_scrape_response resp;
-					resp.action = htonl(action_scrape);
-					resp.transaction_id = m.bits.scrape.transaction_id;
-
-					++scrapes;
-
-					swarm_map_t::iterator j = m_swarms.find(m.bits.scrape.hash[0]);
-					if (j != m_swarms.end())
+					case action_announce:
 					{
-						j->second.scrape(&resp.data[0].seeds, &resp.data[0].download_count
-							, &resp.data[0].downloaders);
-						resp.data[0].seeds = htonl(resp.data[0].seeds);
-						resp.data[0].download_count = htonl(resp.data[0].download_count);
-						resp.data[0].downloaders = htonl(resp.data[0].downloaders);
-					}
+						// find the swarm being announce to
+						// or create it if it doesn't exist
+						swarm& s = m_swarms[m.bits.announce.hash];
 
-					iovec iov = { &resp, 8 + 12};
-					send_buffer.append(&iov, 1, &m.from);
-					break;
+						// prepare the buffer to write the response to
+						char* buf;
+						int len;
+						udp_announce_response resp;
+
+						resp.action = htonl(action_announce);
+						resp.transaction_id = m.bits.announce.transaction_id;
+						resp.interval = htonl(1680 + rand(mt_engine));
+
+						// do the actual announce with the swarm
+						// and get a pointer to the peers back
+						s.announce(now, &m.bits.announce, &buf, &len, &resp.downloaders
+							, &resp.seeds, mt_engine);
+
+						++announces;
+
+						// now turn these counters into network byte order
+						resp.downloaders = htonl(resp.downloaders);
+						resp.seeds = htonl(resp.seeds);
+
+						// set up the iovec array for the response. The header + the
+						// body with the peer list
+						iovec iov[2] = { { &resp, 20}, { buf, size_t(len) } };
+
+						send_buffer.append(iov, 2, &m.from);
+						break;
+					}
+					case action_scrape:
+					{
+						udp_scrape_response resp;
+						resp.action = htonl(action_scrape);
+						resp.transaction_id = m.bits.scrape.transaction_id;
+
+						++scrapes;
+
+						swarm_map_t::iterator j = m_swarms.find(m.bits.scrape.hash[0]);
+						if (j != m_swarms.end())
+						{
+							j->second.scrape(&resp.data[0].seeds, &resp.data[0].download_count
+								, &resp.data[0].downloaders);
+							resp.data[0].seeds = htonl(resp.data[0].seeds);
+							resp.data[0].download_count = htonl(resp.data[0].download_count);
+							resp.data[0].downloaders = htonl(resp.data[0].downloaders);
+						}
+
+						iovec iov = { &resp, 8 + 12};
+						send_buffer.append(&iov, 1, &m.from);
+						break;
+					}
 				}
 			}
 		}
@@ -202,7 +207,7 @@ void announce_thread::thread_fun()
 	}
 }
 
-void announce_thread::post_announces(std::vector<announce_msg> const& m)
+void announce_thread::post_announces(std::vector<announce_msg> m)
 {
 	if (m.empty()) return;
 
@@ -210,14 +215,15 @@ void announce_thread::post_announces(std::vector<announce_msg> const& m)
 
 	// have some upper limit here, to avoid
 	// allocating memory indefinitely
-	if (m_queue.size() >= announce_queue_size)
+	if (m_queue_size >= announce_queue_size)
 	{
 		dropped += m.size();
 		return;
 	}
 
+	m_queue_size += m.size();
 	bool first_insert = m_queue.empty();
-	m_queue.insert(m_queue.begin(), m.begin(), m.end());
+	m_queue.emplace_back(std::move(m));
 
 	// don't send a signal if we don't need to
 	// it's expensive

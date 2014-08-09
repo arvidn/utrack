@@ -83,7 +83,7 @@ struct announce_thread
 	announce_thread& operator=(announce_thread const&) = delete;
 
 	void thread_fun();
-	void post_announces(std::vector<announce_msg> const& m);
+	void post_announces(std::vector<announce_msg> m);
 	~announce_thread();
 
 	std::thread::native_handle_type native_handle() { return m_thread.native_handle(); }
@@ -94,7 +94,7 @@ private:
 	std::mutex m_mutex;
 	std::condition_variable m_cond;
 	// this is the queue new jobs are posted to
-	std::vector<announce_msg> m_queue;
+	std::vector<std::vector<announce_msg>> m_queue;
 
 	// the swarm hash table. Each thread has its own hash table of swarms.
 	// swarms are pinned to certain threads based on their info-hash
@@ -109,6 +109,7 @@ private:
 #endif
 
 	bool m_quit;
+	int m_queue_size;
 	std::thread m_thread;
 };
 

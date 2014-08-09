@@ -125,7 +125,7 @@ void receive_thread::thread_fun()
 
 		for (int i = 0; i < m_announce_threads.size(); ++i)
 		{
-			m_announce_threads[i]->post_announces(announce_buf[i]);
+			m_announce_threads[i]->post_announces(std::move(announce_buf[i]));
 			announce_buf[i].clear();
 		}
 	}
