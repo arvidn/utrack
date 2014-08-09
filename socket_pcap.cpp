@@ -316,7 +316,12 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		printf(&":%02x"[i == 0], uint8_t(m_eth_addr.addr[i]));
 	printf("\n");
 
-	pcap_activate(m_pcap);
+	r = pcap_activate(m_pcap);
+	if (r != 0)
+	{
+		fprintf(stderr, "pcap_activate() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+		exit(-1);
+	}
 
 	m_link_layer = pcap_datalink(m_pcap);
 	if (m_link_layer < 0)
