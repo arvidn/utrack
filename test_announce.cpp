@@ -174,7 +174,7 @@ void incoming_packet(char const* buf, int size
 			static int num_responses = 0;
 			++num_responses;
 			if (num_responses == 0xffffff) m_quit = true;
-			++announces;
+			announces.fetch_add(1, std::memory_order_relaxed);
 			break;
 		}
 		case action_connect:
@@ -187,7 +187,7 @@ void incoming_packet(char const* buf, int size
 				return;
 			}
 
-			++connects;
+			connects.fetch_add(1, std::memory_order_relaxed);
 			send_announce(idx, resp->connection_id, from, send_buffer, loopback);
 			if ((idx & 0x1) == 0)
 				send_announce(idx, resp->connection_id, from, send_buffer, loopback);

@@ -143,7 +143,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 	, sockaddr_in const* from, packet_buffer& send_buffer
 	, std::vector<announce_msg>* announce_buf)
 {
-	bytes_in += size;
+	bytes_in.fetch_add(size, std::memory_order_relaxed);
 
 //	printf("received message from: %x port: %d size: %d\n"
 //		, from->sin_addr.s_addr, ntohs(from->sin_port), size);
@@ -164,13 +164,13 @@ void receive_thread::incoming_packet(char const* buf, int size
 			// TODO: increment dropped counter?
 			if (send_buffer.is_full(16))
 			{
-				dropped_bytes_out += 16;
+				dropped_bytes_out.fetch_add(16, std::memory_order_relaxed);
 				return;
 			}
 
 			if (be64toh(hdr->connection_id) != 0x41727101980LL)
 			{
-				++errors;
+				errors.fetch_add(1, std::memory_order_relaxed);
 				printf("invalid connection ID for connect message (%" PRIx64 ")\n"
 					, be64toh(hdr->connection_id));
 				// log error
@@ -186,7 +186,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 //				, resp.connection_id);
 
 			resp.transaction_id = hdr->transaction_id;
-			++connects;
+			connects.fetch_add(1, std::memory_order_relaxed);
 			iovec iov = { &resp, 16};
 			if (send_buffer.append(&iov, 1, from))
 				return;
@@ -200,7 +200,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 				printf("invalid connection ID (%d.%d.%d.%d:%u) %" PRIx64 "\n"
 					, addr[0], addr[1], addr[2], addr[3], ntohs(from->sin_port)
 					, hdr->connection_id);
-				++errors;
+				errors.fetch_add(1, std::memory_order_relaxed);
 				// log error
 				return;
 			}
@@ -210,7 +210,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 			if (size < 98)
 			{
 				printf("announce packet too short. Expected 100, got %d\n", size);
-				++errors;
+				errors.fetch_add(1, std::memory_order_relaxed);
 				// log incorrect packet
 				return;
 			}
@@ -236,14 +236,14 @@ void receive_thread::incoming_packet(char const* buf, int size
 			if (!verify_connection_id(hdr->connection_id, from))
 			{
 				printf("invalid connection ID for connect message\n");
-				++errors;
+				errors.fetch_add(1, std::memory_order_relaxed);
 				// log error
 				return;
 			}
 			if (size < 16 + 20)
 			{
 				printf("scrape packet too short. Expected 36, got %d\n", size);
-				++errors;
+				errors.fetch_add(1, std::memory_order_relaxed);
 				// log error
 				return;
 			}
@@ -267,7 +267,7 @@ void receive_thread::incoming_packet(char const* buf, int size
 		default:
 			printf("unknown action %d\n", ntohl(hdr->action));
 			assert(false);
-			++errors;
+			errors.fetch_add(1, std::memory_order_relaxed);
 			break;
 	}
 }

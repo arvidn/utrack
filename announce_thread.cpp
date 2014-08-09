@@ -164,7 +164,7 @@ void announce_thread::thread_fun()
 						s.announce(now, &m.bits.announce, &buf, &len, &resp.downloaders
 							, &resp.seeds, mt_engine);
 
-						++announces;
+						announces.fetch_add(1, std::memory_order_relaxed);
 
 						// now turn these counters into network byte order
 						resp.downloaders = htonl(resp.downloaders);
@@ -183,7 +183,7 @@ void announce_thread::thread_fun()
 						resp.action = htonl(action_scrape);
 						resp.transaction_id = m.bits.scrape.transaction_id;
 
-						++scrapes;
+						scrapes.fetch_add(1, std::memory_order_relaxed);
 
 						swarm_map_t::iterator j = m_swarms.find(m.bits.scrape.hash[0]);
 						if (j != m_swarms.end())
@@ -217,7 +217,7 @@ void announce_thread::post_announces(std::vector<announce_msg> m)
 	// allocating memory indefinitely
 	if (m_queue_size >= announce_queue_size)
 	{
-		dropped_announces += m.size();
+		dropped_announces.fetch_add(m.size(), std::memory_order_relaxed);
 		return;
 	}
 

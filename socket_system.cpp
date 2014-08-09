@@ -201,7 +201,7 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 			fprintf(stderr, "sendmsg failed (%d): %s\n", errno, strerror(errno));
 			return false;
 		}
-		bytes_out += r;
+		bytes_out.fetch_add(r, std::memory_order_relaxed);
 	} while (false);
 	return true;
 }

@@ -428,12 +428,12 @@ bool packet_socket::send(packet_buffer& packets)
 
 	if (m_send_cursor + packets.m_send_cursor > m_send_buffer.size())
 	{
-		dropped_bytes_out += packets.m_send_cursor;
+		dropped_bytes_out.fetch_add(packets.m_send_cursor, std::memory_order_relaxed);
 		packets.m_send_cursor = 0;
 		return false;
 	}
 
-	bytes_out += packets.m_send_cursor;
+	bytes_out.fetch_add(packets.m_send_cursor, std::memory_order_relaxed);
 
 	memcpy(&m_send_buffer[m_send_cursor]
 		, packets.m_buf.data(), packets.m_send_cursor);
@@ -501,7 +501,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 #else
 	if (m_send_cursor + buf_size + 28 + 30 > m_buf.size())
 	{
-		dropped_bytes_out += buf_size;
+		dropped_bytes_out.fetch_add(buf_size, std::memory_order_relaxed);
 		return false;
 	}
 
