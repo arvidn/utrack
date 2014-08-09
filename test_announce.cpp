@@ -53,6 +53,7 @@ Copyright (C) 2010-2014 Arvid Norberg
 #include "socket.hpp"
 
 std::atomic<uint32_t> bytes_out(ATOMIC_VAR_INIT(0));
+std::atomic<uint32_t> dropped_bytes_out = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> connects = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> announces = ATOMIC_VAR_INIT(0);
 std::atomic<bool> m_quit(ATOMIC_VAR_INIT(false));

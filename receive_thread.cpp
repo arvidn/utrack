@@ -29,6 +29,7 @@ Copyright (C) 2010-2014  Arvid Norberg
 extern std::atomic<uint32_t> connects;
 extern std::atomic<uint32_t> errors;
 extern std::atomic<uint32_t> bytes_in;
+extern std::atomic<uint32_t> dropped_bytes_out;
 
 extern key_rotate keys;
 
@@ -161,7 +162,11 @@ void receive_thread::incoming_packet(char const* buf, int size
 		case action_connect:
 		{
 			// TODO: increment dropped counter?
-			if (send_buffer.is_full(16)) return;
+			if (send_buffer.is_full(16))
+			{
+				dropped_bytes_out += 16;
+				return;
+			}
 
 			if (be64toh(hdr->connection_id) != 0x41727101980LL)
 			{

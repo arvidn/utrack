@@ -41,7 +41,7 @@ using std::chrono::seconds;
 
 extern std::atomic<uint32_t> bytes_out;
 extern std::atomic<uint32_t> announces;
-extern std::atomic<uint32_t> dropped;
+extern std::atomic<uint32_t> dropped_announces;
 extern std::atomic<uint32_t> scrapes;
 
 std::array<uint8_t, 16> gen_random_key()
@@ -217,7 +217,7 @@ void announce_thread::post_announces(std::vector<announce_msg> m)
 	// allocating memory indefinitely
 	if (m_queue_size >= announce_queue_size)
 	{
-		dropped += m.size();
+		dropped_announces += m.size();
 		return;
 	}
 

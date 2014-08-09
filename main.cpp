@@ -58,6 +58,10 @@ Copyright (C) 2010-2014  Arvid Norberg
 #define MSG_NOSIGNAL 0
 #endif
 
+using std::chrono::steady_clock;
+using std::chrono::duration_cast;
+using std::chrono::seconds;
+
 int interval = default_interval;
 
 // set to true when we're shutting down
@@ -73,9 +77,10 @@ std::atomic<uint32_t> scrapes = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> errors = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> bytes_out = ATOMIC_VAR_INIT(0);
 std::atomic<uint32_t> bytes_in = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> dropped_bytes_out = ATOMIC_VAR_INIT(0);
 
 // the number of dropped announce requests, because we couldn't keep up
-std::atomic<uint32_t> dropped = ATOMIC_VAR_INIT(0);
+std::atomic<uint32_t> dropped_announces = ATOMIC_VAR_INIT(0);
 
 #ifdef _WIN32
 BOOL WINAPI sigint(DWORD s)
@@ -311,19 +316,41 @@ int main(int argc, char* argv[])
 #endif
 	}
 
+	int counter = 0;
 	while (!quit)
 	{
-		std::this_thread::sleep_for(std::chrono::seconds(10));
+		// print column headings every 20 lines
+		if ((counter % 20) == 0)
+		{
+			printf("%-10s %-10s %-10s %-10s %-10s %-10s %-10s %-10s\n"
+				, "conns/s", "announce/s", "scrape/s", "errors/s", "drop/s"
+				, "in (kB/s)", "out (kB/s)", "drop(kB/s)");
+		}
+
+		++counter;
+
+		steady_clock::time_point start = steady_clock::now();
+		std::this_thread::sleep_for(seconds(10));
+		steady_clock::duration d = steady_clock::now() - start;
+		int sec = duration_cast<seconds>(d).count();
+
 		uint32_t last_connects = connects.exchange(0);
 		uint32_t last_announces = announces.exchange(0);
 		uint32_t last_scrapes = scrapes.exchange(0);
 		uint32_t last_errors = errors.exchange(0);
 		uint32_t last_bytes_in = bytes_in.exchange(0);
 		uint32_t last_bytes_out = bytes_out.exchange(0);
-		uint32_t last_dropped = dropped.exchange(0);
-		printf("c: %u a: %u s: %u e: %u d: %u in: %u kB/s out: %u kB/s\n"
-			, last_connects / 10, last_announces / 10, last_scrapes / 10, last_errors / 10
-			, last_dropped / 10, last_bytes_in / 10000, last_bytes_out / 10000);
+		uint32_t last_dropped_bytes_out = dropped_bytes_out.exchange(0);
+		uint32_t last_dropped_announces = dropped_announces.exchange(0);
+		printf("%10u %10u %10u %10u %10u %10u %10u %10u\n"
+			, last_connects / sec
+			, last_announces / sec
+			, last_scrapes / sec
+			, last_errors / sec
+			, last_dropped_announces / sec
+			, last_bytes_in / 1000 / sec
+			, last_bytes_out / 1000 / sec
+			, last_dropped_bytes_out / 1000 / sec);
 		keys.tick();
 	}
 

@@ -58,6 +58,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #endif
 
 extern std::atomic<uint32_t> bytes_out;
+extern std::atomic<uint32_t> dropped_bytes_out;
 
 packet_socket::packet_socket(char const* device, int listen_port)
 	: m_pcap(nullptr)
@@ -427,8 +428,7 @@ bool packet_socket::send(packet_buffer& packets)
 
 	if (m_send_cursor + packets.m_send_cursor > m_send_buffer.size())
 	{
-		printf("(dropping %d kiB)\n"
-			, packets.m_send_cursor / 1024);
+		dropped_bytes_out += packets.m_send_cursor;
 		packets.m_send_cursor = 0;
 		return false;
 	}
@@ -501,7 +501,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 #else
 	if (m_send_cursor + buf_size + 28 + 30 > m_buf.size())
 	{
-		fprintf(stderr, "packet buffer full\n");
+		dropped_bytes_out += buf_size;
 		return false;
 	}
 
