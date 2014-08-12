@@ -100,11 +100,7 @@ void receive_thread::thread_fun()
 	}
 #endif
 
-#ifdef USE_PCAP
 	packet_buffer send_buffer(m_sock);
-#else
-	packet_buffer send_buffer(m_sock);
-#endif
 
 	std::vector<std::vector<announce_msg>> announce_buf(m_announce_threads.size());
 
@@ -118,11 +114,7 @@ void receive_thread::thread_fun()
 			incoming_packet(pkts[i].buffer, pkts[i].buflen
 				, (sockaddr_in*)&pkts[i].from, send_buffer, announce_buf.data());
 
-#ifdef USE_PCAP
 		m_sock.send(send_buffer);
-#else
-		m_sock.send(send_buffer);
-#endif
 
 		for (int i = 0; i < m_announce_threads.size(); ++i)
 		{
