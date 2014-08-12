@@ -92,6 +92,7 @@ void send_connect(sockaddr_in const* to, packet_buffer& buf, bool loopback)
 
 	iovec b = { &req, 16 };
 
+#if !defined USE_SYSTEM_SEND_SOCKET && defined USE_PCAP
 	if (loopback)
 	{
 		sockaddr_in from;
@@ -105,6 +106,7 @@ void send_connect(sockaddr_in const* to, packet_buffer& buf, bool loopback)
 		buf.append_impl(&b, 1, to, &from);
 	}
 	else
+#endif // USE_PCAP
 	{
 		buf.append(&b, 1, to);
 	}
@@ -128,6 +130,7 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 
 	iovec b = { &req, sizeof(req) };
 
+#if !defined USE_SYSTEM_SEND_SOCKET && defined USE_PCAP
 	if (loopback)
 	{
 		sockaddr_in from;
@@ -141,6 +144,7 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 		buf.append_impl(&b, 1, to, &from);
 	}
 	else
+#endif // USE_PCAP
 	{
 		buf.append(&b, 1, to);
 	}
@@ -274,8 +278,8 @@ int main(int argc, char* argv[])
 	}
 	to.sin_port = htons(atoi(argv[3]));
 
-#ifdef USE_SYSTEM_SEND_SOCKET
-	packet_socket sock(argv[1], 14334);
+#if defined USE_SYSTEM_SEND_SOCKET || !defined USE_PCAP
+	packet_socket sock(0);
 #else
 
 	address_eth mac;
@@ -301,7 +305,7 @@ int main(int argc, char* argv[])
 			, argv[2]);
 	}
 
-	packet_socket sock(argv[1], 0);
+	packet_socket sock(argv[1]);
 	if (i != arp.end())
 		sock.add_arp_entry(&to, i->hw_addr);
 #endif // USE_SYSTEM_SEND_SOCKET

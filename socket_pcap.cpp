@@ -55,7 +55,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 extern std::atomic<uint32_t> bytes_out;
 extern std::atomic<uint32_t> dropped_bytes_out;
 
-packet_socket::packet_socket(char const* device, sockaddr const* bind_addr)
+packet_socket::packet_socket(char const* device)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
 #ifndef USE_WINPCAP

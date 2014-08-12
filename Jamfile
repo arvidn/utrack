@@ -49,7 +49,6 @@ exe udp_test
 	test_announce.cpp
 	utils.cpp
 	:
-	<pcap>on
 	<conditional>@pcap
 	<target-os>windows:<library>ws2
 	<target-os>windows:<library>iphlp

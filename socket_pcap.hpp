@@ -50,7 +50,7 @@ struct packet_socket
 
 	// a listen port of 0 means accept packets on any port
 	explicit packet_socket(sockaddr const* bind_addr);
-	explicit packet_socket(char const* device, sockaddr const* bind_addr);
+	explicit packet_socket(char const* device);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
 	packet_socket(packet_socket const&) = delete;
