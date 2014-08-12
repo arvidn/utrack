@@ -21,6 +21,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #define SOCKET_SYSTEM_HPP
 
 #include <array>
+#include "utils.hpp" // for address_eth
 
 struct packet_buffer;
 

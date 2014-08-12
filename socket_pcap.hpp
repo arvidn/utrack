@@ -32,6 +32,8 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <vector>
 #include <unordered_map>
 
+#include "utils.hpp"
+
 enum {
 	// the receive buffer size for packets, specified in uint64_ts
 	receive_buffer_size = 0x40000,
@@ -47,7 +49,8 @@ struct packet_socket
 	friend struct packet_buffer;
 
 	// a listen port of 0 means accept packets on any port
-	explicit packet_socket(char const* device, int listen_port);
+	explicit packet_socket(sockaddr const* bind_addr);
+	explicit packet_socket(char const* device, sockaddr const* bind_addr);
 	~packet_socket();
 	packet_socket(packet_socket&& s);
 	packet_socket(packet_socket const&) = delete;
@@ -64,6 +67,8 @@ struct packet_socket
 	void add_arp_entry(sockaddr_in const* addr, address_eth const& mac);
 
 private:
+
+	void init(char const* device);
 
 	pcap_t* m_pcap;
 	int m_link_layer;

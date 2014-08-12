@@ -34,11 +34,8 @@ Copyright (C) 2010-2014 Arvid Norberg
 
 #include <sys/sysctl.h>
 #include <net/if.h>
-#include <net/route.h>
-#include <netinet/if_ether.h>
 
-#ifdef __linux__
-#else
+#ifndef __linux__
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #endif
@@ -286,76 +283,27 @@ int main(int argc, char* argv[])
 	// we need to find out the MAC address of the destination computer
 	// since we're sending raw ethernet frames. This works on OSX and BSD:
 
-#ifdef _WIN32
-	MIB_IPNETTABLE* table = 0;
-	ULONG out_buf_size = 0;
-	if (GetIpNetTable(table, &out_buf_size, FALSE) != ERROR_INSUFFICIENT_BUFFER)
+	std::error_code ec;
+	std::vector<arp_entry> arp = arp_table(ec);
+	if (ec)
 	{
-		fprintf(stderr, "GetIpNetTable() failed: %d\n", GetLastError());
-		return 1;
-	}
-
-	table = (MIB_IPNETTABLE*)malloc(out_buf_size);
-	if (!table)
-	{
-		fprintf(stderr, "malloc(%d) failed\n", out_buf_size);
-		return 1;
-	}
-
-	if (GetIpNetTable(table, &out_buf_size, FALSE) == NO_ERROR)
-	{
-		for (int i = 0; i < table->dwNumEntries; ++i)
-		{
-			if (to.sin_addr.s_addr != table->table[i].dwAddr) continue;
-
-			memcpy(mac.addr, table->table[i].bPhysAddr, 6);
-			break;
-		}
-	}
-
-	// Free memory
-	free(table);
-#else
-	struct sockaddr_dl *sdl;
-
-	int mib[6] = { CTL_NET, PF_ROUTE, 0, AF_INET, NET_RT_FLAGS, RTF_LLINFO};
-	std::vector<char> buf;
-
-	size_t needed;
-	if (sysctl(mib, 6, NULL, &needed, NULL, 0) < 0)
-	{
-		fprintf(stderr, "sysctl: (%d) %s\n", errno, strerror(errno));
+		fprintf(stderr, "failed to query ARP table: \"%s\"\n"
+			, ec.message().c_str());
 		exit(1);
 	}
 
-	buf.resize(needed);
+	auto i = std::find_if(arp.begin(), arp.end()
+		, [=](arp_entry const& a){ return sockaddr_eq(&a.addr, (sockaddr const*)&to); });
 
-	if (sysctl(mib, 6, buf.data(), &needed, NULL, 0) < 0)
+	if (i == arp.end())
 	{
-		fprintf(stderr, "sysctl: (%d) %s\n", errno, strerror(errno));
-		exit(1);
+		fprintf(stderr, "WARNING: no ARP entry found for \"%s\". please ping it\n"
+			, argv[2]);
 	}
-
-#define ROUNDUP(a) \
-		((a) > 0 ? (1 + (((a) - 1) | (sizeof(long) - 1))) : sizeof(long))
-
-	char* lim = buf.data() + needed;
-	rt_msghdr *rtm;
-	for (char* next = buf.data(); next < lim; next += rtm->rtm_msglen) {
-		rtm = (rt_msghdr *)next;
-		sockaddr_inarp* sin = (sockaddr_inarp *)(rtm + 1);
-		sdl = (sockaddr_dl*)((char*)sin + ROUNDUP(sin->sin_len));
-		if (to.sin_addr.s_addr != sin->sin_addr.s_addr)
-			continue;
-
-		memcpy(mac.addr, LLADDR(sdl), 6);
-		break;
-	}
-	buf.clear();
-#endif // _WIN32
 
 	packet_socket sock(argv[1], 0);
-	sock.add_arp_entry(&to, mac);
+	if (i != arp.end())
+		sock.add_arp_entry(&to, i->hw_addr);
 #endif // USE_SYSTEM_SEND_SOCKET
 	packet_buffer send_buffer(sock);
 

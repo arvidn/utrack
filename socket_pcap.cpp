@@ -18,6 +18,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 
 #include "socket.hpp"
 #include "config.hpp"
+#include "utils.hpp"
 
 #include <stdio.h> // for stderr
 #include <errno.h> // for errno
@@ -39,12 +40,6 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <sys/ioctl.h>
 #include <arpa/inet.h> // for inet_ntop
 
-#ifdef __linux__
-#include <sys/ioctl.h> // for SIOCGIFADDR
-#else
-#include <sys/sockio.h> // for SIOCGIFADDR
-#include <net/if_dl.h> // for sockaddr_dl
-#endif
 #endif
 
 #include <atomic>
@@ -60,7 +55,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 extern std::atomic<uint32_t> bytes_out;
 extern std::atomic<uint32_t> dropped_bytes_out;
 
-packet_socket::packet_socket(char const* device, int listen_port)
+packet_socket::packet_socket(char const* device, sockaddr const* bind_addr)
 	: m_pcap(nullptr)
 	, m_closed(ATOMIC_VAR_INIT(0))
 #ifndef USE_WINPCAP
@@ -74,6 +69,111 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	m_send_buffer.resize(send_buffer_size);
 #endif
 
+	std::error_code ec;
+	std::vector<device_info> devices = interfaces(ec);
+	if (ec)
+	{
+		fprintf(stderr, "failed to list network interfaces: \"%s\"\n"
+			, ec.message().c_str());
+		exit(2);
+	}
+
+	// resolve source IP and network mask from device
+	bool found = false;
+	for (auto const& dev : devices)
+	{
+		printf("device: %s\n", dev.name);
+		printf("  hw: %s\n", to_string(dev.hardware_addr).c_str());
+		if (strcmp(dev.name, device) != 0) continue;
+
+		// just pick the first IPv4 address
+		auto i = std::find_if(dev.addresses.begin(), dev.addresses.end()
+			, [=](network const& a) { return a.ip.sa_family == AF_INET; });
+
+		if (i == dev.addresses.end())
+		{
+			fprintf(stderr, "could not find an IPv4 address on device: \"%s\"\n"
+				, device);
+			exit(2);
+		}
+
+		found = true;
+		m_eth_addr = dev.hardware_addr;
+		m_mask = (sockaddr_in&)i->mask;
+		m_our_addr = (sockaddr_in&)i->ip;
+	}
+
+	if (!found)
+	{
+		fprintf(stderr, "could not find device: \"%s\"\n", device);
+		exit(2);
+	}
+
+	init(device);
+}
+
+packet_socket::packet_socket(sockaddr const* bind_addr)
+	: m_pcap(nullptr)
+	, m_closed(ATOMIC_VAR_INIT(0))
+#ifndef USE_WINPCAP
+	, m_send_cursor(0)
+#endif
+{
+	m_buffer.resize(receive_buffer_size);
+#ifdef USE_WINPCAP
+	m_send_buffer.reserve(21);
+#else
+	m_send_buffer.resize(send_buffer_size);
+#endif
+
+	if (bind_addr->sa_family != AF_INET)
+	{
+		fprintf(stderr, "only IPv4 supported\n");
+		exit(2);
+		return;
+	}
+
+	m_our_addr = *(sockaddr_in*)bind_addr;
+
+	std::error_code ec;
+	std::vector<device_info> devices = interfaces(ec);
+	if (ec)
+	{
+		fprintf(stderr, "failed to list network interfaces: \"%s\"\n"
+			, ec.message().c_str());
+		exit(2);
+	}
+
+	// resolve device and network mask from bind_addr
+	char device[IFNAMSIZ];
+	bool found = false;
+	for (auto const& dev : devices)
+	{
+		printf("device: %s\n", dev.name);
+		printf("  hw: %s\n", to_string(dev.hardware_addr).c_str());
+
+		auto i = std::find_if(dev.addresses.begin(), dev.addresses.end()
+			, [=](network const& a) { return sockaddr_eq(&a.ip, (sockaddr const*)&m_our_addr); });
+
+		if (i == dev.addresses.end()) continue;
+
+		found = true;
+		m_eth_addr = dev.hardware_addr;
+		m_mask = (sockaddr_in&)i->mask;
+		strncpy(device, dev.name, IFNAMSIZ);
+	}
+
+	if (!found)
+	{
+		fprintf(stderr, "failed to bind: no device found with that address\n");
+		exit(2);
+	}
+
+	init(device);
+}
+
+void packet_socket::init(char const* device)
+{
 	char error_msg[PCAP_ERRBUF_SIZE];
 	m_pcap = pcap_create(device, error_msg);
 	if (m_pcap == nullptr)
@@ -110,121 +210,8 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	if (r == -1)
 		fprintf(stderr, "pcap_setdirection() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
 
-	uint32_t ip = 0;
-	uint32_t mask = 0;
-	r = pcap_lookupnet(device, &ip, &mask, error_msg);
-	if (r != 0)
-	{
-		printf("pcap_lookupnet() = %d \"%s\"\n", r, error_msg);
-		exit(1);
-	}
-
-	m_our_addr.sin_family = AF_INET;
-#if !defined _WIN32 && !defined __linux__
-	m_our_addr.sin_len = sizeof(sockaddr_in);
-#endif
-	m_our_addr.sin_addr.s_addr = ip;
-	m_our_addr.sin_port = htons(listen_port);
-
-	m_mask.sin_family = AF_INET;
-#if !defined _WIN32 && !defined __linux__
-	m_mask.sin_len = sizeof(sockaddr_in);
-#endif
-	m_mask.sin_addr.s_addr = mask;
-	m_mask.sin_port = 0;
-
-
-#ifdef _WIN32
-	ULONG dwSize = 0;
-	DWORD dwRetVal;
-
-	std::vector<IP_ADAPTER_ADDRESSES> buffer(10);
-	IP_ADAPTER_ADDRESSES *adapters = buffer.data();
-
-	if (GetAdaptersAddresses(AF_UNSPEC
-		, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
-		, nullptr
-		, adapters, &dwSize) == ERROR_BUFFER_OVERFLOW)
-	{
-		buffer.resize((dwSize + sizeof(IP_ADAPTER_ADDRESSES) - 1)/ sizeof(IP_ADAPTER_ADDRESSES));
-		adapters = (IP_ADAPTER_ADDRESSES*)buffer.data();
-	}
-
-	bool found = false;
-	if (memcmp(device, "\\Device\\NPF_", 12) != 0)
-	{
-		fprintf(stderr, "invalid device name\n");
-		exit(1);
-	}
-	char const* cmp_dev = device + sizeof("\\Device\\NPF_") - 1;
-	if ((dwRetVal = GetAdaptersAddresses(AF_UNSPEC
-		, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
-		, nullptr
-		, adapters, &dwSize)) == NO_ERROR)
-	{
-		for (; adapters; adapters = adapters->Next)
-		{
-			if (strcmp(adapters->AdapterName, cmp_dev) != 0) continue;
-			IP_ADAPTER_UNICAST_ADDRESS* unicast = adapters->FirstUnicastAddress;
-
-			while (unicast)
-			{
-				if (unicast->Address.lpSockaddr->sa_family == AF_INET)
-				{
-					found = true;
-					m_our_addr.sin_addr.s_addr
-						= ((sockaddr_in*)unicast->Address.lpSockaddr)->sin_addr.s_addr;
-					break;
-				}
-				unicast = unicast->Next;
-			}
-
-			if (found) break;
-		}
-		if (!found)
-		{
-			fprintf(stderr, "device not found \"%s\"\n"
-				, device);
-			exit(1);
-		}
-	}
-	else
-	{
-		fprintf(stderr, "GetIpAddrTable call failed with %d\n", dwRetVal);
-	}
-
-
-#else
-	ifreq req;
-	strncpy(req.ifr_name, device, IFNAMSIZ);
-	int s = socket(AF_INET, SOCK_DGRAM, 0);
-	if (s < 0)
-	{
-		fprintf(stderr, "socket() = %d \"%s\"\n", r, strerror(errno));
-		exit(-1);
-	}
-	r = ioctl(s, SIOCGIFADDR, &req);
-	::close(s);
-
-	if (r == 0)
-	{
-		sockaddr_in* our_ip = (sockaddr_in*)&req.ifr_addr;
-		if (our_ip->sin_family != AF_INET)
-		{
-			fprintf(stderr, "device \"%s\" is not supported\n", device);
-			exit(-1);
-		}
-		m_our_addr = *our_ip;
-		m_our_addr.sin_port = htons(listen_port);
-	}
-	else
-	{
-		fprintf(stderr, "get ifaddr = %d \"%s\"\n", r, error_msg);
-	}
-#endif
-
-	ip = ntohl(m_our_addr.sin_addr.s_addr);
-	mask = ntohl(mask);
+	uint32_t ip = ntohl(m_our_addr.sin_addr.s_addr);
+	uint32_t mask = ntohl(m_mask.sin_addr.s_addr);
 
 	printf("bound to %d.%d.%d.%d\n"
 		, (ip >> 24) & 0xff
@@ -238,84 +225,7 @@ packet_socket::packet_socket(char const* device, int listen_port)
 		, (mask >> 8) & 0xff
 		, mask & 0xff);
 
-#if defined _WIN32
-	// find the ethernet address for device
-	PIP_ADAPTER_ADDRESSES adapter_addresses = 0;
-	ULONG out_buf_size = 0;
-	if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
-		| GAA_FLAG_SKIP_ANYCAST, NULL, adapter_addresses, &out_buf_size) != ERROR_BUFFER_OVERFLOW)
-	{
-		fprintf(stderr, "GetAdaptersAddresses() failed: %d\n", GetLastError());
-		exit(1);
-	}
-
-	adapter_addresses = (IP_ADAPTER_ADDRESSES*)malloc(out_buf_size);
-	if (!adapter_addresses)
-	{
-		fprintf(stderr, "malloc(%d) failed\n", out_buf_size);
-		exit(1);
-	}
-
-	if (GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
-		| GAA_FLAG_SKIP_ANYCAST, NULL, adapter_addresses, &out_buf_size) == NO_ERROR)
-	{
-		char const* name = strchr(device, '{');
-		for (PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
-			adapter != 0; adapter = adapter->Next)
-		{
-			if (strcmp(name, adapter->AdapterName) != 0) continue;
-
-			memcpy(m_eth_addr.addr, adapter->PhysicalAddress, 6);
-			break;
-		}
-	}
-
-	// Free memory
-	free(adapter_addresses);
-#elif defined __linux__
-	
-	{
-		ifreq ifr;
-
-		int fd = socket(AF_INET, SOCK_DGRAM, 0);
-
-		ifr.ifr_addr.sa_family = AF_INET;
-		strcpy(ifr.ifr_name, device);
-		ioctl(fd, SIOCGIFHWADDR, &ifr);
-		::close(fd);
-
-		memcpy(m_eth_addr.addr, ifr.ifr_hwaddr.sa_data, 6);
-	}
-
-#else
-	pcap_if_t *alldevs;
-	r = pcap_findalldevs(&alldevs, error_msg);
-	if (r != 0)
-	{
-		printf("pcap_findalldevs() = %d \"%s\"\n", r, error_msg);
-		exit(1);
-	}
-
-	for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
-	{
-		if (strcmp(d->name, device) != 0) continue;
-		for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
-		{
-			if (a->addr->sa_family != AF_LINK || a->addr->sa_data == nullptr)
-				continue;
-
-			sockaddr_dl* link = (struct sockaddr_dl*)a->addr;
-			memcpy(m_eth_addr.addr, LLADDR(link), 6);
-			break;
-		}
-	}
-	pcap_freealldevs(alldevs);
-#endif
-
-	printf("ethernet: ");
-	for (int i = 0; i< 6; i++)
-		printf(&":%02x"[i == 0], uint8_t(m_eth_addr.addr[i]));
-	printf("\n");
+	printf("hw: %s\n", to_string(m_eth_addr).c_str());
 
 	r = pcap_activate(m_pcap);
 	if (r != 0)
@@ -340,10 +250,10 @@ packet_socket::packet_socket(char const* device, int listen_port)
 	}
 
 	std::string program_text = "udp";
-	if (listen_port != 0)
+	if (m_our_addr.sin_port != 0)
 	{
 		program_text += " dst port ";
-		program_text += std::to_string(listen_port);
+		program_text += std::to_string(ntohs(m_our_addr.sin_port));
 
 		char buf[100];
 		program_text += " and dst host ";

@@ -102,11 +102,6 @@ void print_usage()
 		"   bind-ip      the IP address of the network device to listen on\n"
 		"   port         the UDP port to listen on (defaults to 80)\n"
 		"\n"
-#ifdef USE_PCAP
-		"utrack --list-devices\n\n"
-		"   prints available network devices to bind to\n"
-		"\n"
-#endif
 		"utrack --help\n\n"
 		"   displays this message\n"
 		);
@@ -125,14 +120,6 @@ static struct wsa_init_t {
 
 int main(int argc, char* argv[])
 {
-#ifdef USE_PCAP
-	bool list_devices = false;
-	if (argc == 2 && strcmp(argv[1], "--list-devices") == 0)
-	{
-		list_devices = true;
-	}
-#endif // USE_PCAP
-
 	if (argc == 2 && strcmp(argv[1], "--help") == 0)
 		print_usage();
 
@@ -148,76 +135,20 @@ int main(int argc, char* argv[])
 		exit(1);
 	}
 
-	char const* bind_ip = argv[1];
-	int r;
-
-#ifdef USE_PCAP
-	char device[200];
-	device[0] = '\0';
-
-	pcap_if_t *alldevs;
-	char error_msg[PCAP_ERRBUF_SIZE];
-	r = pcap_findalldevs(&alldevs, error_msg);
-	if (r != 0)
-	{
-		printf("pcap_findalldevs() = %d \"%s\"\n", r, error_msg);
-		exit(1);
-	}
-
-	if (alldevs == nullptr)
-	{
-		printf("no available devices. You may need root privileges\n");
-		exit(1);
-
-	}
-
-	for (pcap_if_t* d = alldevs; d != nullptr; d = d->next)
-	{
-		if (list_devices)
-			printf("%s\n", d->name);
-
-		for (pcap_addr_t* a = d->addresses; a != nullptr; a = a->next)
-		{
-			char buf[100];
-			switch (a->addr->sa_family)
-			{
-				case AF_INET:
-					inet_ntop(AF_INET
-						, &((sockaddr_in*)a->addr)->sin_addr, buf, sizeof(buf));
-					if (list_devices)
-						printf("   %s\n", buf);
-					if (strcmp(buf, bind_ip) == 0)
-						strcpy(device, d->name);
-					break;
-				case AF_INET6:
-					inet_ntop(AF_INET6
-						, &((sockaddr_in6*)a->addr)->sin6_addr, buf, sizeof(buf));
-					if (list_devices)
-						printf("   %s\n", buf);
-					if (strcmp(buf, bind_ip) == 0)
-						strcpy(device, d->name);
-					break;
-			}
-		}
-	}
-	pcap_freealldevs(alldevs);
-
-	if (list_devices) return 0;
-
-	if (device[0] == '\0')
-	{
-		fprintf(stderr, "no device with ip: %s\nuse --list-devices to list them\n"
-			, bind_ip);
-		return 1;
-	}
-
-	printf("listening on UDP port %d on device %s\n"
-		, listen_port, device);
-#else
-	printf("listening on UDP port %d on IP %s\n"
-		, listen_port, bind_ip);
+	sockaddr_in bind_addr;
+	bind_addr.sin_family = AF_INET;
+#if !defined _WIN32 && !defined __linux__
+	bind_addr.sin_len = sizeof(sockaddr_in);
 #endif
-	
+	bind_addr.sin_port = htons(listen_port);
+
+	int r = inet_pton(AF_INET, argv[1], &bind_addr.sin_addr);
+	if (r != 1)
+	{
+		fprintf(stderr, "invalid bind address:\"%s\"\n", argv[1]);
+		exit(1);
+	}
+
 	std::vector<announce_thread*> announce_threads;
 	std::vector<receive_thread*> receive_threads;
 
@@ -251,7 +182,7 @@ int main(int argc, char* argv[])
 #endif
 
 #ifdef USE_PCAP
-	packet_socket socket(device, listen_port);
+	packet_socket socket((sockaddr const*)&bind_addr);
 #endif
 
 	// create threads. We should create the same number of
