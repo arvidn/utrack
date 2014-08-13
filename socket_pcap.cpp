@@ -362,7 +362,7 @@ packet_buffer::packet_buffer(packet_socket& s)
 	, m_from(s.m_our_addr)
 	, m_mask(s.m_mask)
 	, m_eth_from(s.m_eth_addr)
-	, m_arp_cache(s.m_arp_cache)
+	, m_arp(s)
 #ifdef USE_WINPCAP
 	, m_queue(pcap_sendqueue_alloc(0x100000))
 	, m_pcap(s.m_pcap)
@@ -440,16 +440,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		}
 		case DLT_EN10MB:
 		{
-			uint32_t dst = to->sin_addr.s_addr;
-
-			// if the address is not part of the local network, set dst to 0
-			// to indicate the default route out of our network
-			if ((dst & m_mask.sin_addr.s_addr) !=
-				(from->sin_addr.s_addr & m_mask.sin_addr.s_addr))
-				dst = 0;
-
-			assert(m_arp_cache.count(dst) > 0);
-			address_eth const& mac = m_arp_cache[dst];
+			address_eth const& mac = m_arp.lookup(from, to, &m_mask);
 
 			memcpy(ptr, mac.addr, 6);
 			// source MAC address
@@ -602,7 +593,7 @@ struct receive_state
 	sockaddr_in local_addr;
 	sockaddr_in local_mask;
 
-	std::unordered_map<uint32_t, address_eth>* arp_cache;
+	arp_cache* arp;
 };
 
 void packet_handler(u_char* user, const struct pcap_pkthdr* h
@@ -712,31 +703,9 @@ void packet_handler(u_char* user, const struct pcap_pkthdr* h
 	// ETHERNET
 	if (st->link_header_size == 14)
 	{
-		uint32_t dst = from->sin_addr.s_addr;
-
-		// if the address is not part of the local network, set dst to 0
-		// to indicate the default route out of our network
-		if ((dst & st->local_mask.sin_addr.s_addr) !=
-			(st->local_addr.sin_addr.s_addr & st->local_mask.sin_addr.s_addr))
-			dst = 0;
-
-		if (st->arp_cache->count(dst) == 0)
+		if (st->arp->has_entry(&st->local_addr, from, &st->local_mask) == 0)
 		{
-			(*st->arp_cache)[dst] = address_eth(ethernet_header + 6);
-
-			uint8_t* ip = (uint8_t*)&dst;
-			printf("adding ARP entry: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n"
-				, ip[0]
-				, ip[1]
-				, ip[2]
-				, ip[3]
-				, ethernet_header[6]
-				, ethernet_header[7]
-				, ethernet_header[8]
-				, ethernet_header[9]
-				, ethernet_header[10]
-				, ethernet_header[11]
-				);
+			st->arp->add_arp_entry(from, address_eth(ethernet_header + 6));
 		}
 	}
 
@@ -939,7 +908,7 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 	st.handle = m_pcap;
 	st.local_addr = m_our_addr;
 	st.local_mask = m_mask;
-	st.arp_cache = &m_arp_cache;
+	st.arp = this;
 
 	switch (m_link_layer)
 	{
@@ -988,25 +957,5 @@ int packet_socket::receive(incoming_packet_t* in_packets, int num)
 void packet_socket::local_endpoint(sockaddr_in* addr)
 {
 	*addr = m_our_addr;
-}
-
-void packet_socket::add_arp_entry(sockaddr_in const* addr
-	, address_eth const& mac)
-{
-	uint8_t* ip = (uint8_t*)&addr->sin_addr.s_addr;
-	printf("adding ARP entry: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n"
-		, ip[0]
-		, ip[1]
-		, ip[2]
-		, ip[3]
-		, mac.addr[0]
-		, mac.addr[1]
-		, mac.addr[2]
-		, mac.addr[3]
-		, mac.addr[4]
-		, mac.addr[5]
-		);
-
-	m_arp_cache[addr->sin_addr.s_addr] = mac;
 }
 

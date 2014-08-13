@@ -33,6 +33,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <unordered_map>
 
 #include "utils.hpp"
+#include "arp_cache.hpp"
 
 enum {
 	// the receive buffer size for packets, specified in uint64_ts
@@ -44,7 +45,7 @@ enum {
 
 struct packet_buffer;
 
-struct packet_socket
+struct packet_socket : arp_cache
 {
 	friend struct packet_buffer;
 
@@ -63,8 +64,6 @@ struct packet_socket
 
 	// fills in the in_packets array with incoming packets. Returns the number filled in
 	int receive(incoming_packet_t* in_packets, int num);
-
-	void add_arp_entry(sockaddr_in const* addr, address_eth const& mac);
 
 private:
 
@@ -85,10 +84,6 @@ private:
 	// the ethernet address for this interface. Use for rendering ethernet
 	// frames for outgoing packets.
 	address_eth m_eth_addr;
-
-	// maps local IPs (IPs masked by the network mask)
-	// to the corresponding ethernet address (MAC address)
-	std::unordered_map<uint32_t, address_eth> m_arp_cache;
 
 	void send_thread();
 
@@ -142,7 +137,7 @@ private:
 	sockaddr_in m_from;
 	sockaddr_in m_mask;
 	address_eth m_eth_from;
-	std::unordered_map<uint32_t, address_eth>& m_arp_cache;
+	arp_cache const& m_arp;
 #ifdef USE_WINPCAP
 	pcap_send_queue* m_queue;
 	pcap_t* m_pcap;
