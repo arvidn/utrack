@@ -1,0 +1,7 @@
+
+1. clean up listing interfaces API (turn it into an iterator) and factor out
+   into its own library.
+
+2. clean up packet_socket interface, document it and factor out into its own
+   library.
+

@@ -62,17 +62,204 @@ struct packet_socket : arp_cache
 
 	void local_endpoint(sockaddr_in* addr);
 
-	// fills in the in_packets array with incoming packets. Returns the number filled in
-	int receive(incoming_packet_t* in_packets, int num);
+	private:
+
+	template <class F>
+	struct receive_state
+	{
+		pcap_t* handle;
+
+		// the number of bytes to skip in each buffer to get to the IP
+		// header.
+		int link_header_size;
+
+		// the number of packets left to receive
+		int* num;
+
+		// ignore packets sent to other addresses and ports than this one.
+		// a port of 0 means accept packets on any port
+		sockaddr_in local_addr;
+		sockaddr_in local_mask;
+
+		arp_cache* arp;
+		F* callback;
+	};
+
+public:
+
+	// receive at least one packet on the socket. No more than num (defaults
+	// to 1000). For each received packet, callback is called with the following
+	// arguments: (sockaddr_in* from, uint8_t* buffer, int len)
+	// the buffer is valid until the callback returns
+	// returns -1 on error
+	template <class F>
+	int receive(F callback, int num = 1000)
+	{
+		if (num <= 0) return 0;
+
+		// TODO: should we just pass in "this" instead? and make it a member
+		// function?
+		receive_state<F> st;
+		st.handle = m_pcap;
+		st.local_addr = m_our_addr;
+		st.local_mask = m_mask;
+		st.arp = this;
+		st.callback = &callback;
+		st.num = &num;
+
+		switch (m_link_layer)
+		{
+			case DLT_NULL: st.link_header_size = 4; break;
+			case DLT_EN10MB: st.link_header_size = 14; break;
+			default:
+			  assert(false);
+		}
+
+		int r;
+
+		bool reset_timeout = false;
+
+		while (true)
+		{
+			if (m_closed) return -1;
+
+			r = pcap_dispatch(m_pcap, num, &packet_handler<F>, (uint8_t*)&st);
+
+			if (r == -1)
+			{
+				fprintf(stderr, "pcap_dispatch() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+				if (r == -3) exit(2);
+				return -1;
+			}
+
+			if (num <= 0) return 0;
+
+			if (!reset_timeout)
+			{
+				r = pcap_set_timeout(m_pcap, 100);
+				if (r == -1)
+					fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+				reset_timeout = true;
+			}
+		}
+
+		if (reset_timeout)
+		{
+			r = pcap_set_timeout(m_pcap, 1);
+			if (r == -1)
+				fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
+		}
+	}
 
 private:
+
+	template <class F>
+	static void packet_handler(u_char* user, const struct pcap_pkthdr* h
+		, const u_char* bytes)
+	{
+		receive_state<F>* st = (receive_state<F>*)user;
+
+		// TODO: support IPv6 also
+
+		uint8_t const* ethernet_header = bytes;
+
+		uint8_t const* ip_header = bytes + st->link_header_size;
+
+		// we only support IPv4 for now, and no IP options, just
+		// the 20 byte header
+
+		// version and length. Ignore any non IPv4 packets and any packets
+		// with IP options headers
+		if (ip_header[0] != 0x45) {
+			// this is noisy, don't print out for every IPv6 packet
+			//		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
+			//			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
+			return;
+		}
+
+		// flags (ignore any packet with more-fragments set)
+		if (ip_header[6] & 0x20) {
+			fprintf(stderr, "ignoring fragmented IP packet\n");
+			return;
+		}
+
+		// ignore any packet with fragment offset
+		if ((ip_header[6] & 0x1f) != 0 || ip_header[7] != 0) {
+			fprintf(stderr, "ignoring fragmented IP packet\n");
+			return;
+		}
+
+		// ignore any packet whose transport protocol is not UDP
+		if (ip_header[9] != 0x11) {
+			fprintf(stderr, "ignoring non UDP packet (protocol: %d)\n"
+				, ip_header[9]);
+			return;
+		}
+
+		uint8_t const* udp_header = ip_header + 20;
+
+		// only look at packets to our listen port
+		if (st->local_addr.sin_port != 0 &&
+			memcmp(&udp_header[2], &st->local_addr.sin_port, 2) != 0)
+		{
+			fprintf(stderr, "ignoring packet not to our port (port: %d)\n"
+				, ntohs(*(uint16_t*)(udp_header+2)));
+			return;
+		}
+
+		// only look at packets sent to the IP we bound to
+		// port 0 means any address
+		if (st->local_addr.sin_port != 0 &&
+			memcmp(&st->local_addr.sin_addr.s_addr, ip_header + 16, 4) != 0)
+		{
+			fprintf(stderr, "ignoring packet not to our address (%d.%d.%d.%d)\n"
+				, ip_header[16]
+				, ip_header[17]
+				, ip_header[18]
+				, ip_header[19]);
+			return;
+		}
+
+		int payload_len = h->caplen - 28 - st->link_header_size;
+		uint8_t const* payload = bytes + 28 + st->link_header_size;
+
+		if (payload_len > 1500)
+		{
+			fprintf(stderr, "incoming packet too large\n");
+			return;
+		}
+
+		// copy from IP header
+		sockaddr_in from;
+		memset(&from, 0, sizeof(from));
+#if !defined _WIN32 && !defined __linux__
+		from.sin_len = sizeof(sockaddr_in);
+#endif
+		from.sin_family = AF_INET;
+
+		// UDP header: src-port, dst-port, len, chksum
+		memcpy(&from.sin_port, udp_header, 2);
+		memcpy(&from.sin_addr, ip_header + 12, 4);
+
+		// ETHERNET
+		if (st->link_header_size == 14)
+		{
+			if (st->arp->has_entry(&st->local_addr, &from, &st->local_mask) == 0)
+			{
+				st->arp->add_arp_entry(&from, address_eth(ethernet_header + 6));
+			}
+		}
+
+		(*st->callback)(&from, payload, payload_len);
+
+		--*st->num;
+	}
 
 	void init(char const* device);
 
 	pcap_t* m_pcap;
 	int m_link_layer;
 	std::atomic<uint32_t> m_closed;
-	std::vector<uint64_t> m_buffer;
 
 	// the IP and port we send packets from
 	sockaddr_in m_our_addr;

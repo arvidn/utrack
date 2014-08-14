@@ -62,7 +62,6 @@ packet_socket::packet_socket(char const* device)
 	, m_send_cursor(0)
 #endif
 {
-	m_buffer.resize(receive_buffer_size);
 #ifdef USE_WINPCAP
 	m_send_buffer.reserve(21);
 #else
@@ -119,7 +118,6 @@ packet_socket::packet_socket(sockaddr const* bind_addr)
 	, m_send_cursor(0)
 #endif
 {
-	m_buffer.resize(receive_buffer_size);
 #ifdef USE_WINPCAP
 	m_send_buffer.reserve(21);
 #else
@@ -565,161 +563,6 @@ bool packet_buffer::append_impl(iovec const* v, int num
 	return true;
 }
 
-struct receive_state
-{
-	incoming_packet_t* pkts;
-
-	// the total length of the pkts array
-	int len;
-
-	// the next slot in pkts to write a packet entry to
-	int current;
-
-	// the buffer to copy packets into
-	uint64_t* buffer;
-
-	// the offset into m_buffer we have allocated so far. Where we can
-	// copy the next incoming packet to
-	int buffer_offset;
-
-	pcap_t* handle;
-
-	// the number of bytes to skip in each buffer to get to the IP
-	// header.
-	int link_header_size;
-
-	// ignore packets sent to other addresses and ports than this one.
-	// a port of 0 means accept packets on any port
-	sockaddr_in local_addr;
-	sockaddr_in local_mask;
-
-	arp_cache* arp;
-};
-
-void packet_handler(u_char* user, const struct pcap_pkthdr* h
-	, const u_char* bytes)
-{
-	receive_state* st = (receive_state*)user;
-
-	if (st->current >= st->len)
-	{
-		fprintf(stderr, "receive iov full (%d) (why is this callback still being called?)\n"
-			, st->current);
-		pcap_breakloop(st->handle);
-		return;
-	}
-
-	// TODO: support IPv6 also
-
-	uint8_t const* ethernet_header = bytes;
-
-	uint8_t const* ip_header = bytes + st->link_header_size;
-
-	// we only support IPv4 for now, and no IP options, just
-	// the 20 byte header
-
-	// version and length. Ignore any non IPv4 packets and any packets
-	// with IP options headers
-	if (ip_header[0] != 0x45) {
-		// this is noisy, don't print out for every IPv6 packet
-//		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
-//			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
-		return;
-	}
-
-	// flags (ignore any packet with more-fragments set)
-	if (ip_header[6] & 0x20) {
-		fprintf(stderr, "ignoring fragmented IP packet\n");
-		return;
-	}
-
-	// ignore any packet with fragment offset
-	if ((ip_header[6] & 0x1f) != 0 || ip_header[7] != 0) {
-		fprintf(stderr, "ignoring fragmented IP packet\n");
-		return;
-	}
-
-	// ignore any packet whose transport protocol is not UDP
-	if (ip_header[9] != 0x11) {
-		fprintf(stderr, "ignoring non UDP packet (protocol: %d)\n"
-			, ip_header[9]);
-		return;
-	}
-
-	uint8_t const* udp_header = ip_header + 20;
-
-	// only look at packets to our listen port
-	if (st->local_addr.sin_port != 0 &&
-		memcmp(&udp_header[2], &st->local_addr.sin_port, 2) != 0)
-	{
-		fprintf(stderr, "ignoring packet not to our port (port: %d)\n"
-			, ntohs(*(uint16_t*)(udp_header+2)));
-		return;
-	}
-
-	// only look at packets sent to the IP we bound to
-	// port 0 means any address
-	if (st->local_addr.sin_port != 0 &&
-		memcmp(&st->local_addr.sin_addr.s_addr, ip_header + 16, 4) != 0)
-	{
-		fprintf(stderr, "ignoring packet not to our address (%d.%d.%d.%d)\n"
-			, ip_header[16]
-			, ip_header[17]
-			, ip_header[18]
-			, ip_header[19]);
-		return;
-	}
-
-	int payload_len = h->caplen - 28 - st->link_header_size;
-	uint8_t const* payload = bytes + 28 + st->link_header_size;
-
-	if (payload_len > 1500)
-	{
-		fprintf(stderr, "incoming packet too large\n");
-		return;
-	}
-
-	incoming_packet_t& pkt = st->pkts[st->current];
-	int len8 = (payload_len + 7) / 8;
-
-	assert(st->buffer_offset + len8 <= receive_buffer_size);
-
-	memcpy(&st->buffer[st->buffer_offset], payload, payload_len);
-	pkt.buffer = (char*)&st->buffer[st->buffer_offset];
-	pkt.buflen = payload_len;
-	st->buffer_offset += len8;
-
-	// copy from IP header
-	memset(&pkt.from, 0, sizeof(pkt.from));
-	sockaddr_in* from = (sockaddr_in*)&pkt.from;
-#if !defined _WIN32 && !defined __linux__
-	from->sin_len = sizeof(sockaddr_in);
-#endif
-	from->sin_family = AF_INET;
-	// UDP header: src-port, dst-port, len, chksum
-	memcpy(&from->sin_port, udp_header, 2);
-	memcpy(&from->sin_addr, ip_header + 12, 4);
-
-	// ETHERNET
-	if (st->link_header_size == 14)
-	{
-		if (st->arp->has_entry(&st->local_addr, from, &st->local_mask) == 0)
-		{
-			st->arp->add_arp_entry(from, address_eth(ethernet_header + 6));
-		}
-	}
-
-	++st->current;
-
-	// if we won't fit another full packet, break the loop and deliver the
-	// packets we have so far to the user, then resume reading more packets
-	if (st->buffer_offset + 1500/8 > receive_buffer_size)
-	{
-		pcap_breakloop(st->handle);
-		return;
-	}
-}
-
 #ifdef USE_WINPCAP
 void packet_socket::send_thread()
 {
@@ -893,66 +736,6 @@ void packet_socket::send_thread()
 #endif
 }
 #endif // !USE_WINPCAP
-
-// fills in the in_packets array with incoming packets. Returns the number filled in
-int packet_socket::receive(incoming_packet_t* in_packets, int num)
-{
-	// TODO: should we just pass in "this" instead? and make it a member
-	// function?
-	receive_state st;
-	st.pkts = in_packets;
-	st.len = num;
-	st.current = 0;
-	st.buffer = m_buffer.data();
-	st.buffer_offset = 0;
-	st.handle = m_pcap;
-	st.local_addr = m_our_addr;
-	st.local_mask = m_mask;
-	st.arp = this;
-
-	switch (m_link_layer)
-	{
-		case DLT_NULL: st.link_header_size = 4; break;
-		case DLT_EN10MB: st.link_header_size = 14; break;
-		default:
-			assert(false);
-	}
-
-	int r;
-
-	bool reset_timeout = false;
-
-	while (true)
-	{
-		if (m_closed) return -1;
-
-		r = pcap_dispatch(m_pcap, num - st.current, &packet_handler, (uint8_t*)&st);
-
-		if (r == -1)
-		{
-			fprintf(stderr, "pcap_dispatch() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
-			if (r == -3) exit(2);
-			return -1;
-		}
-
-		if (st.current != 0) return st.current;
-
-		if (!reset_timeout)
-		{
-			r = pcap_set_timeout(m_pcap, 100);
-			if (r == -1)
-				fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
-			reset_timeout = true;
-		}
-	}
-
-	if (reset_timeout)
-	{
-		r = pcap_set_timeout(m_pcap, 1);
-		if (r == -1)
-			fprintf(stderr, "pcap_set_timeout() = %d \"%s\"\n", r, pcap_geterr(m_pcap));
-	}
-}
 
 void packet_socket::local_endpoint(sockaddr_in* addr)
 {

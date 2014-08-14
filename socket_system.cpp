@@ -25,13 +25,6 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include <stdlib.h> // for exit
 #include <fcntl.h> // for F_GETFL and F_SETFL
 
-#ifndef _WIN32
-#include <unistd.h> // for close
-#include <poll.h> // for poll
-#else
-#include <winsock2.h>
-#endif
-
 #include <atomic>
 #include <assert.h>
 
@@ -204,94 +197,6 @@ bool packet_buffer::append(iovec const* v, int num, sockaddr_in const* to)
 		bytes_out.fetch_add(r, std::memory_order_relaxed);
 	} while (false);
 	return true;
-}
-
-// This interface supports returning multiple buffers just to prepare
-// for maybe using something more efficient than recvfrom() one dat
-int packet_socket::receive(incoming_packet_t* in_packets, int num)
-{
-	assert(m_receive);
-	if (num == 0) return 0;
-
-	sockaddr_in from;
-	socklen_t fromlen = sizeof(from);
-
-	// if there's no data available, try a few times in a row right away.
-	// if there's still no data after that, go to sleep waiting for more
-	int spincount = receive_spin_count;
-
-	// this loop is primarily here to be able to restart
-	// in the event of EINTR and also in the case of no data
-	// being available immediately (in which case we block in poll)
-	while (true)
-	{
-		fromlen = sizeof(from);
-		int size = recvfrom(m_socket, (char*)m_buffer.data(), m_buffer.size()*8, 0
-			, (sockaddr*)&from, &fromlen);
-		if (size == -1)
-		{
-#ifdef _WIN32
-			int err = WSAGetLastError();
-#else
-			int err = errno;
-#endif
-			if (err == EINTR) continue;
-#ifdef _WIN32
-			if (err == WSAEWOULDBLOCK)
-#else
-			if (err == EAGAIN || errno == EWOULDBLOCK)
-#endif
-			{
-				--spincount;
-				if (spincount > 0) continue;
-				// the first read came back empty, wait for new data
-				// on the socket and try again
-				pollfd e;
-				e.fd = m_socket;
-				e.events = POLLIN;
-				e.revents = 0;
-
-				spincount = receive_spin_count;
-
-#ifdef _WIN32
-				int r = WSAPoll(&e, 1, 2000);
-#else
-				int r = poll(&e, 1, 2000);
-#endif
-				if (r == -1)
-				{
-					if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-						continue;
-					fprintf(stderr, "poll failed (%d): %s\n", err, strerror(err));
-					return -1;
-				}
-
-				if (r == 0)
-				{
-					// no events, see if the socket was closed
-					if (m_socket == -1) return -1;
-					continue;
-				}
-
-				if ((e.revents & POLLHUP) || (e.revents & POLLERR))
-				{
-					fprintf(stderr, "poll returned socket failure (%d): %s\n"
-						, err, strerror(err));
-					return -1;
-				}
-				continue;
-			}
-			fprintf(stderr, "recvfrom failed (%d): %s\n", err, strerror(err));
-			return -1;
-		}
-
-		memcpy(&in_packets->from, &from, sizeof(from));
-		in_packets->buffer = (char*)m_buffer.data();
-		in_packets->buflen = size;
-		break;
-	}
-
-	return 1;
 }
 
 void packet_socket::local_endpoint(sockaddr_in* addr)

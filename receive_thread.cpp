@@ -104,15 +104,12 @@ void receive_thread::thread_fun()
 
 	std::vector<std::vector<announce_msg>> announce_buf(m_announce_threads.size());
 
-	incoming_packet_t pkts[1024];
-
 	for (;;)
 	{
-		int recvd = m_sock.receive(pkts, sizeof(pkts)/sizeof(pkts[0]));
-		if (recvd <= 0) break;
-		for (int i = 0; i < recvd; ++i)
-			incoming_packet(pkts[i].buffer, pkts[i].buflen
-				, (sockaddr_in*)&pkts[i].from, send_buffer, announce_buf.data());
+		int r = m_sock.receive([&](sockaddr_in const* from, uint8_t const* buf, int len)
+			{
+				incoming_packet(buf, len, from, send_buffer, announce_buf.data());
+			});
 
 		m_sock.send(send_buffer);
 
@@ -121,6 +118,7 @@ void receive_thread::thread_fun()
 			m_announce_threads[i]->post_announces(std::move(announce_buf[i]));
 			announce_buf[i].clear();
 		}
+		if (r < 0) break;
 	}
 }
 
@@ -131,7 +129,7 @@ void receive_thread::thread_fun()
 // similarly, announce_buf is where announce messages for the announce
 // threads go. It's an array of announce_msg buffers, one entry per
 // announce thread.
-void receive_thread::incoming_packet(char const* buf, int size
+void receive_thread::incoming_packet(uint8_t const* buf, int size
 	, sockaddr_in const* from, packet_buffer& send_buffer
 	, std::vector<announce_msg>* announce_buf)
 {

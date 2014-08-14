@@ -150,7 +150,7 @@ void send_announce(int idx, uint64_t connection_id, sockaddr_in const* to
 	}
 }
 
-void incoming_packet(char const* buf, int size
+void incoming_packet(uint8_t const* buf, int size
 	, sockaddr_in const* from, packet_buffer& send_buffer, bool loopback)
 {
 	udp_announce_response const* resp = (udp_announce_response const*)buf;
@@ -329,16 +329,13 @@ int main(int argc, char* argv[])
 		send_connect(&to, send_buffer, loopback);
 	sock.send(send_buffer);
 
-	incoming_packet_t pkts[1024];
 	while (!m_quit.load())
 	{
-		int recvd = sock.receive(pkts, sizeof(pkts)/sizeof(pkts[0]));
-		if (recvd <= 0) break;
-		for (int i = 0; i < recvd; ++i)
-		{
-			incoming_packet(pkts[i].buffer, pkts[i].buflen
-				, (sockaddr_in*)&pkts[i].from, send_buffer, loopback);
-		}
+		int r = sock.receive(
+			[&](sockaddr_in const* from, uint8_t const* buf, int len)
+			{
+				incoming_packet(buf, len, from, send_buffer, loopback);
+			});
 
 		sock.send(send_buffer);
 
@@ -355,6 +352,7 @@ int main(int argc, char* argv[])
 				, last_announces * 1000 / ms);
 			start = now;
 		}
+		if (r < 0) break;
 	}
 
 	clock::time_point end = clock::now();

@@ -32,23 +32,23 @@ on the command line in the utrack root directory.
 
 Optional build options:
 
-+--------------+--------------------------------------------------+
-| option       | description                                      |
-+==============+==================================================+
-| pcap=on      | Enable libpcap support. This will improve UDP    |
-|              | performance by circumventing some of the         |
-|              | syscall overhead associated with udp sockets.    |
-+--------------+--------------------------------------------------+
-| pcap=win     | Enable libpcap support and use libwinpcap        |
-|              | specific extensions. This speeds up both sending |
-|              | and receiving of packets.                        |
-+--------------+--------------------------------------------------+
-| pcap=receive | Enable libpcap only for receiving packets, use   |
-| -only        | regular sockets for sending replies.             |
-+--------------+--------------------------------------------------+
-| stage        | copy the resulting utrack binary to the root dir |
-+--------------+--------------------------------------------------+
-| stage-test   | copy the resulting udp_test binary to the root   |
-|              | directory. (The test requires libpcap)           |
-+--------------+--------------------------------------------------+
++-------------------+--------------------------------------------------+
+| option            | description                                      |
++===================+==================================================+
+| pcap=on           | Enable libpcap support. This will improve UDP    |
+|                   | performance by circumventing some of the         |
+|                   | syscall overhead associated with udp sockets.    |
++-------------------+--------------------------------------------------+
+| pcap=win          | Enable libpcap support and use libwinpcap        |
+|                   | specific extensions. This speeds up both sending |
+|                   | and receiving of packets.                        |
++-------------------+--------------------------------------------------+
+| pcap=receive-only | Enable libpcap only for receiving packets, use   |
+|                   | regular sockets for sending replies.             |
++-------------------+--------------------------------------------------+
+| stage             | copy the resulting utrack binary to the root dir |
++-------------------+--------------------------------------------------+
+| stage-test        | copy the resulting udp_test binary to the root   |
+|                   | directory. (The test requires libpcap)           |
++-------------------+--------------------------------------------------+
 
