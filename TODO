@@ -1,7 +1,9 @@
 
-1. clean up listing interfaces API (turn it into an iterator) and factor out
+1. move source and header files into 'src' directory
+
+2. clean up listing interfaces API (turn it into an iterator) and factor out
    into its own library.
 
-2. clean up packet_socket interface, document it and factor out into its own
+3. clean up packet_socket interface, document it and factor out into its own
    library.
 
