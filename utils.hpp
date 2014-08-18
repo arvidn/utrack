@@ -59,9 +59,7 @@ struct arp_entry
 	address_eth hw_addr;
 };
 
-#if USE_PCAP
 std::vector<device_info> interfaces(std::error_code& ec);
-#endif
 
 std::vector<arp_entry> arp_table(std::error_code& ec);
 

@@ -54,6 +54,8 @@ struct incoming_packet_t
 
 #ifdef USE_PCAP
 #include "socket_pcap.hpp"
+#elif USE_NETMAP
+#include "socket_netmap.hpp"
 #else
 #include "socket_system.hpp"
 #endif

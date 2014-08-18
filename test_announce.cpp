@@ -278,7 +278,7 @@ int main(int argc, char* argv[])
 	}
 	to.sin_port = htons(atoi(argv[3]));
 
-#if defined USE_SYSTEM_SEND_SOCKET || !defined USE_PCAP
+#if !defined USE_PCAP
 	packet_socket sock(0);
 #else
 

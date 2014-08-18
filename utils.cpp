@@ -100,10 +100,6 @@ std::string to_string(address_eth const& addr)
 	return std::string(ret, 6*3 - 1);
 }
 
-// as long ther's still a dependency of pcap_findalldevs
-// only have this funtion visible when using it
-#if USE_PCAP
-
 std::vector<device_info> interfaces(std::error_code& ec)
 {
 	std::vector<device_info> ret;
@@ -234,8 +230,6 @@ std::vector<device_info> interfaces(std::error_code& ec)
 	return ret;
 #endif
 }
-
-#endif // USE_PCAP
 
 std::vector<arp_entry> arp_table(std::error_code& ec)
 {

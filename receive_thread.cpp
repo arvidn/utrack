@@ -60,7 +60,7 @@ bool verify_connection_id(uint64_t conn_id, sockaddr_in const* from)
 		|| conn_id == gen_secret_digest(from, keys.prev_key());
 }
 
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 receive_thread::receive_thread(packet_socket& s
 	, std::vector<announce_thread*> const& at)
 	: m_sock(s)

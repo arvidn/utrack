@@ -3,9 +3,9 @@ import feature : feature ;
 install stage-test : udp_test : <location>. ;
 install stage : utrack : <location>. ;
 
-feature pcap : off on win receive-only : composite propagated link-incompatible ;
-feature.compose <pcap>win : <define>USE_WINPCAP ;
-feature.compose <pcap>receive-only : <define>USE_SYSTEM_SEND_SOCKET ;
+feature net : system pcap netmap pcap-receive-only : composite propagated link-incompatible ;
+feature.compose <net>pcap-receive-only : <define>USE_SYSTEM_SEND_SOCKET ;
+feature.compose <net>netmap : <define>USE_NETMAP ;
 
 explicit stage-test ;
 explicit stage ;
@@ -16,14 +16,18 @@ lib libpcap : : <name>pcap : <search>/opt/local/lib
 lib libwpcap : : <name>wpcap : <search>"c:\\Program Files\\wpdpack\\lib"
 	:
 	<include>"c:\\Program Files\\wpdpack\\include"
-	<define>WPCAP <define>USE_PCAP ;
+	<define>USE_WINPCAP <define>USE_PCAP ;
 
-rule pcap ( properties * )
+rule net ( properties * )
 {
 	local result ;
-	if <pcap>off in $(properties)
+	if <net>system in $(properties)
 	{
 		result += <source>socket_system.cpp ;
+	}
+	else if <net>netmap in $(properties)
+	{
+		result += <source>socket_netmap.cpp ;
 	}
 	else
 	{
@@ -50,7 +54,7 @@ exe udp_test
 	utils.cpp
 	stack.cpp
 	:
-	<conditional>@pcap
+	<conditional>@net
 	<target-os>windows:<library>ws2
 	<target-os>windows:<library>iphlp
 	<threading>multi
@@ -71,7 +75,7 @@ exe utrack
 	:
 	<target-os>windows:<library>ws2
 	<target-os>windows:<library>iphlp
-	<conditional>@pcap
+	<conditional>@net
 	<threading>multi
 	;
 
