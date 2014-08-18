@@ -19,6 +19,7 @@ Copyright (C) 2013-2014 Arvid Norberg
 #include "socket.hpp"
 #include "config.hpp"
 #include "utils.hpp"
+#include "stack.hpp"
 
 #include <stdio.h> // for stderr
 #include <errno.h> // for errno
@@ -417,15 +418,33 @@ bool packet_buffer::append_impl(iovec const* v, int num
 
 	std::uint8_t* prefix = ptr;
 	ptr += 2;
-
-	int len = 0;
 #endif
 
 #ifdef USE_SYSTEM_SEND_SOCKET
+	int len = 0;
+
 	memcpy(ptr, to, sizeof(sockaddr_in));
 	ptr += sizeof(sockaddr_in);
 	len += sizeof(sockaddr_in);
+	for (int i = 0; i < num; ++i)
+	{
+		memcpy(ptr, v[i].iov_base, v[i].iov_len);
+		ptr += v[i].iov_len;
+		len += v[i].iov_len;
+	}
+	m_send_cursor += len + 2;
+
 #else
+
+	if (to->sin_family != AF_INET)
+	{
+		fprintf(stderr, "unsupported network protocol (only IPv4 is supported)\n");
+		return false;
+	}
+
+	int len = 0;
+	int r;
+
 	switch (m_link_layer)
 	{
 		case DLT_NULL:
@@ -438,18 +457,11 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		}
 		case DLT_EN10MB:
 		{
-			address_eth const& mac = m_arp.lookup(from, to, &m_mask);
-
-			memcpy(ptr, mac.addr, 6);
-			// source MAC address
-			memcpy(ptr + 6, m_eth_from.addr, 6);
-			// ethertype (upper layer protocol)
-			// 0x0800 = IPv4
-			// 0x86dd = IPv6
-			ptr[12] = 0x08;
-			ptr[13] = 0x00;
-			ptr += 14;
-			len += 14;
+			r = render_eth_frame(ptr, 1500 - len, to, from, &m_mask
+				, m_eth_from, m_arp);
+			if (r < 0) return false;
+			ptr += len;
+			len += r;
 			break;
 		}
 		default:
@@ -458,95 +470,11 @@ bool packet_buffer::append_impl(iovec const* v, int num
 			return false;
 	}
 
-	if (to->sin_family != AF_INET)
-	{
-		fprintf(stderr, "unsupported network protocol (only IPv4 is supported)\n");
-		return false;
-	}
+	r = render_ip_frame(ptr, 1500 - len, v, num, to, from);
 
-	std::uint8_t* ip_header = ptr;
+	if (r < 0) return false;
+	len += r;
 
-	// version and header length
-	ip_header[0] = (4 << 4) | 5;
-	// DSCP and ECN
-	ip_header[1] = 0;
-
-	// packet length
-	ip_header[2] = (buf_size + 20 + 8) >> 8;
-	ip_header[3] = (buf_size + 20 + 8) & 0xff;
-
-	// identification
-	ip_header[4] = 0;
-	ip_header[5] = 0;
-
-	// fragment offset and flags
-	ip_header[6] = 0;
-	ip_header[7] = 0;
-
-	// TTL
-	ip_header[8] = 0x80;
-
-	// protocol
-	ip_header[9] = 17;
-
-	// checksum
-	ip_header[10] = 0;
-	ip_header[11] = 0;
-
-	// from addr
-	memcpy(ip_header + 12, &from->sin_addr.s_addr, 4);
-
-	// to addr
-	memcpy(ip_header + 16, &to->sin_addr.s_addr, 4);
-
-	// calculate the IP checksum
-	std::uint16_t chk = 0;
-	for (int i = 0; i < 20; i += 2)
-	{
-		chk += (ip_header[i] << 8) | ip_header[i+1];
-	}
-	chk = ~chk;
-
-	ip_header[10] = chk >> 8;
-	ip_header[11] = chk & 0xff;
-
-	ptr += 20;
-	len += 20;
-
-	std::uint8_t* udp_header = ip_header + 20;
-
-	if (from->sin_port == 0)
-	{
-		// we need to make up a source port here if our
-		// listen port is 0 (i.e. in "promiscuous" mode)
-		// this essentially only happens in the load test
-		uint16_t port = htons(6881);
-		memcpy(&udp_header[0], &port, 2);
-	}
-	else
-	{
-		memcpy(&udp_header[0], &from->sin_port, 2);
-	}
-	memcpy(&udp_header[2], &to->sin_port, 2);
-	udp_header[4] = (buf_size + 8) >> 8;
-	udp_header[5] = (buf_size + 8) & 0xff;
-
-	// UDP checksum
-	udp_header[6] = 0;
-	udp_header[7] = 0;
-
-	ptr += 8;
-	len += 8;
-#endif
-
-	for (int i = 0; i < num; ++i)
-	{
-		memcpy(ptr, v[i].iov_base, v[i].iov_len);
-		ptr += v[i].iov_len;
-		len += v[i].iov_len;
-	}
-
-	assert(len <= 1500);
 #ifdef USE_WINPCAP
 	pcap_pkthdr hdr;
 	hdr.caplen = len;
@@ -559,6 +487,8 @@ bool packet_buffer::append_impl(iovec const* v, int num
 
 	m_send_cursor += len + 2;
 #endif
+
+#endif // USE_SYSTEM_SEND_SOCKET
 
 	return true;
 }

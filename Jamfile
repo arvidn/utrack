@@ -48,6 +48,7 @@ exe udp_test
 	:
 	test_announce.cpp
 	utils.cpp
+	stack.cpp
 	:
 	<conditional>@pcap
 	<target-os>windows:<library>ws2
@@ -66,6 +67,7 @@ exe utrack
 	key_rotate.cpp
 	receive_thread.cpp
 	utils.cpp
+	stack.cpp
 	:
 	<target-os>windows:<library>ws2
 	<target-os>windows:<library>iphlp
