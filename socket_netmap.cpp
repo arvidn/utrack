@@ -369,137 +369,15 @@ bool packet_buffer::append_impl(iovec const* v, int num
 	return true;
 }
 
-struct receive_state
+bool packet_buffer::is_full(int buf_size) const
 {
-	incoming_packet_t* pkts;
-
-	// the total length of the pkts array
-	int len;
-
-	// the next slot in pkts to write a packet entry to
-	int current;
-
-	packet_socket* self;
-};
-
-void packet_handler::packet_handler(u_char* user, const struct pcap_pkthdr* h
-	, const u_char* bytes)
-{
-	receive_state* st = (receive_state*)user;
-
-	if (st->current >= st->len)
-	{
-		fprintf(stderr, "receive iov full (%d) (why is this callback still being called?)\n"
-			, st->current);
-		return;
+	// loop over all transmit rings. If a single of them has some space,
+	// we're not full
+	for (int i = m_hw_rings->cur_tx_ring; i <= m_hw_rings->last_tx_ring; ++i) {
+		netmap_ring* tx_ring = NETMAP_TXRING(m_hw_rings->nifp, i);
+		if (!nm_ring_empty(tx_ring)) return false;
 	}
-
-	// TODO: support IPv6 also
-
-	uint8_t const* ethernet_header = bytes;
-
-	uint8_t const* ip_header = bytes + st->link_header_size;
-
-	// we only support IPv4 for now, and no IP options, just
-	// the 20 byte header
-
-	// version and length. Ignore any non IPv4 packets and any packets
-	// with IP options headers
-	if (ip_header[0] != 0x45) {
-		// this is noisy, don't print out for every IPv6 packet
-//		fprintf(stderr, "ignoring IP packet version: %d header size: %d\n"
-//			, ip_header[0] >> 4, (ip_header[0] & 0xf) * 4);
-		return;
-	}
-
-	// flags (ignore any packet with more-fragments set)
-	if (ip_header[6] & 0x20) {
-		fprintf(stderr, "ignoring fragmented IP packet\n");
-		return;
-	}
-
-	// ignore any packet with fragment offset
-	if ((ip_header[6] & 0x1f) != 0 || ip_header[7] != 0) {
-		fprintf(stderr, "ignoring fragmented IP packet\n");
-		return;
-	}
-
-	// ignore any packet whose transport protocol is not UDP
-	if (ip_header[9] != 0x11) {
-		fprintf(stderr, "ignoring non UDP packet (protocol: %d)\n"
-			, ip_header[9]);
-		return;
-	}
-
-	uint8_t const* udp_header = ip_header + 20;
-
-	// only look at packets to our listen port
-	if (st->local_addr.sin_port != 0 &&
-		memcmp(&udp_header[2], &st->local_addr.sin_port, 2) != 0)
-	{
-		fprintf(stderr, "ignoring packet not to our port (port: %d)\n"
-			, ntohs(*(uint16_t*)(udp_header+2)));
-		return;
-	}
-
-	// only look at packets sent to the IP we bound to
-	// port 0 means any address
-	if (st->local_addr.sin_port != 0 &&
-		memcmp(&st->local_addr.sin_addr.s_addr, ip_header + 16, 4) != 0)
-	{
-		fprintf(stderr, "ignoring packet not to our address (%d.%d.%d.%d)\n"
-			, ip_header[16]
-			, ip_header[17]
-			, ip_header[18]
-			, ip_header[19]);
-		return;
-	}
-
-	int payload_len = h->caplen - 28 - st->link_header_size;
-	uint8_t const* payload = bytes + 28 + st->link_header_size;
-
-	if (payload_len > 1500)
-	{
-		fprintf(stderr, "incoming packet too large\n");
-		return;
-	}
-
-	incoming_packet_t& pkt = st->pkts[st->current];
-	int len8 = (payload_len + 7) / 8;
-
-	assert(st->buffer_offset + len8 <= receive_buffer_size);
-
-	memcpy(&st->buffer[st->buffer_offset], payload, payload_len);
-	pkt.buffer = (char*)&st->buffer[st->buffer_offset];
-	pkt.buflen = payload_len;
-	st->buffer_offset += len8;
-
-	// copy from IP header
-	memset(&pkt.from, 0, sizeof(pkt.from));
-	sockaddr_in* from = (sockaddr_in*)&pkt.from;
-#if !defined _WIN32 && !defined __linux__
-	from->sin_len = sizeof(sockaddr_in);
-#endif
-	from->sin_family = AF_INET;
-	// UDP header: src-port, dst-port, len, chksum
-	memcpy(&from->sin_port, udp_header, 2);
-	memcpy(&from->sin_addr, ip_header + 12, 4);
-
-	// ETHERNET
-	if (st->arp->has_entry(&st->local_addr, from, &st->local_mask) == 0)
-	{
-		st->arp->add_arp_entry(from, address_eth(ethernet_header + 6));
-	}
-
-	++st->current;
-
-	// if we won't fit another full packet, break the loop and deliver the
-	// packets we have so far to the user, then resume reading more packets
-	if (st->buffer_offset + 1500/8 > receive_buffer_size)
-	{
-		pcap_breakloop(st->handle);
-		return;
-	}
+	return true;
 }
 
 void packet_socket::local_endpoint(sockaddr_in* addr)

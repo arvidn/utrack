@@ -62,7 +62,7 @@ struct packet_socket : arp_cache
 
 	void local_endpoint(sockaddr_in* addr);
 
-	private:
+private:
 
 	template <class F>
 	struct receive_state
