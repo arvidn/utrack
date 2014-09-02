@@ -52,7 +52,7 @@ std::array<uint8_t, 16> gen_random_key()
 	return ret;
 }
 
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 announce_thread::announce_thread(packet_socket& s)
 	: m_sock(s)
 	, m_quit(false)

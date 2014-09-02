@@ -181,7 +181,7 @@ int main(int argc, char* argv[])
 	}
 #endif
 
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 	packet_socket socket((sockaddr const*)&bind_addr);
 #endif
 
@@ -199,7 +199,7 @@ int main(int argc, char* argv[])
 #endif
 	for (int i = 0; i < num_cores; ++i)
 	{
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 		announce_threads.push_back(new announce_thread(socket));
 #else
 		announce_threads.push_back(new announce_thread(listen_port));
@@ -227,7 +227,7 @@ int main(int argc, char* argv[])
 	printf("starting %d receive threads\n", num_receive_threads);
 	for (int i = 0; i < num_receive_threads; ++i)
 	{
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 		receive_threads.push_back(new receive_thread(socket, announce_threads));
 #else
 		receive_threads.push_back(new receive_thread(listen_port, announce_threads));

@@ -211,31 +211,11 @@ void packet_socket::close()
 
 bool packet_socket::send(packet_buffer& packets)
 {
-	// This is a no-op. The sending is done when adding
-	// to the packet_buffer
+	ioctl(m_hw_rings->fd, NIOCTXSYNC, NULL);
 	return true;
 }
 
-packet_buffer::packet_buffer(packet_socket& s)
-	: m_link_layer(s.m_link_layer)
-	, m_from(s.m_our_addr)
-	, m_mask(s.m_mask)
-	, m_eth_from(s.m_eth_addr)
-	, m_arp(s)
-{
-}
-
-packet_buffer::~packet_buffer()
-{
-}
-
-bool packet_buffer::append(iovec const* v, int num
-	, sockaddr_in const* to)
-{
-	return append_impl(v, num, to, &m_from);
-}
-
-bool packet_buffer::append_impl(iovec const* v, int num
+bool packet_socket::append_impl(iovec const* v, int num
 	, sockaddr_in const* to, sockaddr_in const* from)
 {
 	int buf_size = 0;
@@ -247,119 +227,28 @@ bool packet_buffer::append_impl(iovec const* v, int num
 		return false;
 	}
 
-	std::uint8_t buf[1500];
-	std::uint8_t* ptr = buf;
-
-	std::uint8_t* prefix = ptr;
-	ptr += 2;
-
-	int len = 0;
-
-	address_eth const& mac = m_arp.lookup(from, to, &m_mask);
-
-	memcpy(ptr, mac.addr, 6);
-	// source MAC address
-	memcpy(ptr + 6, m_eth_from.addr, 6);
-	// ethertype (upper layer protocol)
-	// 0x0800 = IPv4
-	// 0x86dd = IPv6
-	ptr[12] = 0x08;
-	ptr[13] = 0x00;
-	ptr += 14;
-	len += 14;
-
 	if (to->sin_family != AF_INET)
 	{
 		fprintf(stderr, "unsupported network protocol (only IPv4 is supported)\n");
 		return false;
 	}
 
-	std::uint8_t* ip_header = ptr;
+	std::uint8_t buf[1500];
+	std::uint8_t* ptr = buf;
+	int len = 0;
 
-	// version and header length
-	ip_header[0] = (4 << 4) | 5;
-	// DSCP and ECN
-	ip_header[1] = 0;
+	int r = render_eth_frame(ptr, 1500 - len, to, from, &m_mask
+		, m_eth_addr, *this);
+	if (r < 0) return false;
+	ptr += len;
+	len += r;
 
-	// packet length
-	ip_header[2] = (buf_size + 20 + 8) >> 8;
-	ip_header[3] = (buf_size + 20 + 8) & 0xff;
+	r = render_ip_frame(ptr, 1500 - len, v, num, to, from);
 
-	// identification
-	ip_header[4] = 0;
-	ip_header[5] = 0;
+	if (r < 0) return false;
+	len += r;
 
-	// fragment offset and flags
-	ip_header[6] = 0;
-	ip_header[7] = 0;
-
-	// TTL
-	ip_header[8] = 0x80;
-
-	// protocol
-	ip_header[9] = 17;
-
-	// checksum
-	ip_header[10] = 0;
-	ip_header[11] = 0;
-
-	// from addr
-	memcpy(ip_header + 12, &from->sin_addr.s_addr, 4);
-
-	// to addr
-	memcpy(ip_header + 16, &to->sin_addr.s_addr, 4);
-
-	// calculate the IP checksum
-	std::uint16_t chk = 0;
-	for (int i = 0; i < 20; i += 2)
-	{
-		chk += (ip_header[i] << 8) | ip_header[i+1];
-	}
-	chk = ~chk;
-
-	ip_header[10] = chk >> 8;
-	ip_header[11] = chk & 0xff;
-
-	ptr += 20;
-	len += 20;
-
-	std::uint8_t* udp_header = ip_header + 20;
-
-	if (from->sin_port == 0)
-	{
-		// we need to make up a source port here if our
-		// listen port is 0 (i.e. in "promiscuous" mode)
-		// this essentially only happens in the load test
-		uint16_t port = htons(6881);
-		memcpy(&udp_header[0], &port, 2);
-	}
-	else
-	{
-		memcpy(&udp_header[0], &from->sin_port, 2);
-	}
-	memcpy(&udp_header[2], &to->sin_port, 2);
-	udp_header[4] = (buf_size + 8) >> 8;
-	udp_header[5] = (buf_size + 8) & 0xff;
-
-	// UDP checksum
-	udp_header[6] = 0;
-	udp_header[7] = 0;
-
-	ptr += 8;
-	len += 8;
-
-	for (int i = 0; i < num; ++i)
-	{
-		memcpy(ptr, v[i].iov_base, v[i].iov_len);
-		ptr += v[i].iov_len;
-		len += v[i].iov_len;
-	}
-
-	assert(len <= 1500);
-	prefix[0] = (len >> 8) & 0xff;
-	prefix[1] = len & 0xff;
-
-	int r = nm_inject(m_hw_rings, buf, len + 2);
+	r = nm_inject(m_hw_rings, buf, len + 2);
 	if (r == 0)
 	{
 		dropped_bytes_out.fetch_add(buf_size, std::memory_order_relaxed);
@@ -369,7 +258,7 @@ bool packet_buffer::append_impl(iovec const* v, int num
 	return true;
 }
 
-bool packet_buffer::is_full(int buf_size) const
+bool packet_socket::is_full(int buf_size) const
 {
 	// loop over all transmit rings. If a single of them has some space,
 	// we're not full
@@ -378,6 +267,28 @@ bool packet_buffer::is_full(int buf_size) const
 		if (!nm_ring_empty(tx_ring)) return false;
 	}
 	return true;
+}
+
+packet_buffer::packet_buffer(packet_socket& s)
+	: m_sock(s)
+{
+}
+
+bool packet_buffer::append(iovec const* v, int num
+	, sockaddr_in const* to)
+{
+	return m_sock.append_impl(v, num, to, &m_sock.m_our_addr);
+}
+
+bool packet_buffer::append_impl(iovec const* v, int num
+	, sockaddr_in const* to, sockaddr_in const* from)
+{
+	return m_sock.append_impl(v, num, to, from);
+}
+
+bool packet_buffer::is_full(int buf_size) const
+{
+	return m_sock.is_full(buf_size);
 }
 
 void packet_socket::local_endpoint(sockaddr_in* addr)

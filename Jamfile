@@ -11,12 +11,11 @@ explicit stage-test ;
 explicit stage ;
 
 lib libpcap : : <name>pcap : <search>/opt/local/lib
-	: <include>/opt/local/include <define>USE_PCAP ;
+	: <include>/opt/local/include ;
 
 lib libwpcap : : <name>wpcap : <search>"c:\\Program Files\\wpdpack\\lib"
 	:
-	<include>"c:\\Program Files\\wpdpack\\include"
-	<define>USE_WINPCAP <define>USE_PCAP ;
+	<include>"c:\\Program Files\\wpdpack\\include" ;
 
 rule net ( properties * )
 {
@@ -28,16 +27,19 @@ rule net ( properties * )
 	else if <net>netmap in $(properties)
 	{
 		result += <source>socket_netmap.cpp ;
+
+		# temporary, until we have interfaces() not depend on libpcap
+		result += <library>libpcap ;
 	}
 	else
 	{
 		if <target-os>windows in $(properties)
 		{
-			result += <library>libwpcap ;
+			result += <library>libwpcap <define>USE_WINPCAP <define>USE_PCAP ;
 		}
 		else
 		{
-			result += <library>libpcap ;
+			result += <library>libpcap <define>USE_PCAP ;
 		}
 
 		result += <source>socket_pcap.cpp ;

@@ -72,7 +72,7 @@ struct siphash_fun
 // UDP socket
 struct announce_thread
 {
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 	announce_thread(packet_socket& s);
 #else
 	announce_thread(int listen_port);
@@ -101,7 +101,7 @@ private:
 	typedef std::unordered_map<sha1_hash, swarm, siphash_fun> swarm_map_t;
 	swarm_map_t m_swarms;
 
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 	packet_socket& m_sock;
 #else
 	// socket used to send responses to

@@ -39,7 +39,7 @@ struct announce_thread;
 // to appropriate announce_thread (if it's an announce)
 struct receive_thread
 {
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 	receive_thread(packet_socket& s, std::vector<announce_thread*> const& at);
 #else
 	receive_thread(int listen_port, std::vector<announce_thread*> const& at);
@@ -64,7 +64,7 @@ struct receive_thread
 
 private:
 
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 	packet_socket& m_sock;
 #else
 	packet_socket m_sock;

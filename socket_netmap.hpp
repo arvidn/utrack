@@ -30,6 +30,7 @@ Copyright (C) 2014 Arvid Norberg
 #include <unordered_map>
 
 #include "utils.hpp"
+#include "stack.hpp"
 #include "arp_cache.hpp"
 
 enum {
@@ -181,6 +182,11 @@ struct packet_socket : arp_cache
 
 private:
 
+	bool append_impl(iovec const* v, int num, sockaddr_in const* to
+		, sockaddr_in const* from);
+
+	bool is_full(int buf_size) const;
+
 	// this is a template to avoid the cost of function pointer indirection
 	// and possible instruction pre-fetch stall. packets are pulled from src,
 	// and forwarded to dst (except for the ones accepted by the callback)
@@ -214,10 +220,12 @@ private:
 		// ri is the index of the receive ring we're reading from.
 		// when a ring is depleted, we move on to the next ring
 		int ri;
-		for (ri = src->cur_rx_ring; ri <= src->last_rx_ring
-			&& cnt != got; ++ri) {
+		for (ri = src->cur_rx_ring; n > 0
+			&& cnt != got; ++ri, --n) {
 
-			assert(ri <= src->last_rx_ring);
+			if (ri > src->last_rx_ring)
+				ri = src->first_rx_ring;
+
 			netmap_ring* rx_ring = NETMAP_RXRING(src->nifp, ri);
 
 			for ( ; !nm_ring_empty(rx_ring) && cnt != got; got++) {
@@ -283,14 +291,11 @@ private:
 	address_eth m_eth_addr;
 };
 
-#error it probably doesn't make sense to have a separate type for this \
-	a socket that wants to buffer outgoing packets can just do that internally
 struct packet_buffer
 {
 	friend struct packet_socket;
 
 	explicit packet_buffer(packet_socket& s);
-	~packet_buffer();
 
 	bool append(iovec const* v, int num, sockaddr_in const* to);
 
@@ -301,13 +306,7 @@ struct packet_buffer
 
 private:
 
-	int m_link_layer;
-
-	sockaddr_in m_from;
-	sockaddr_in m_mask;
-	address_eth m_eth_from;
-
-	arp_cache const& m_arp;
+	packet_socket& m_sock;
 };
 
 #endif // SOCKET_NETMAP_HPP
