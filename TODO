@@ -7,3 +7,9 @@
 3. clean up packet_socket interface, document it and factor out into its own
    library.
 
+4. for netmap, make a singleton to hold the device context, each socket
+	instance represents a one or two hardware rings. On construction, the user
+	decides whether the socket reads or writes, or both. The socket has a
+	static member function that tells the user how many read and write rings
+	there are.
+

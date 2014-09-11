@@ -219,7 +219,7 @@ int main(int argc, char* argv[])
 #endif
 	}
 
-#ifdef USE_PCAP
+#if defined USE_PCAP || defined USE_NETMAP
 	const int num_receive_threads = 1;
 #else
 	const int num_receive_threads = num_cores;

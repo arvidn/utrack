@@ -102,6 +102,10 @@ void announce_thread::thread_fun()
 
 	for (;;)
 	{
+		// TODO: this could be turned into a lock-free queue, it could be polled
+		// and only if it's empty would we grab the lock and wait for the
+		// condition variable. Or we could spin on it with increasing sleep times
+		// to cover the low-utilization case
 		std::unique_lock<std::mutex> l(m_mutex);
 		while (m_queue.empty()
 			&& !m_quit
